@@ -1,0 +1,60 @@
+# Data files - DO NOT UPLOAD (contains sensitive UK Biobank data)
+data/
+*.csv
+*.parquet
+*.tsv
+
+# Genomics data files
+genomics/*.csv
+genomics/logs/
+
+# Model outputs and results (large binary files)
+output/
+*.joblib
+*.json
+!prediction/config.py
+*.tabpfn_fit
+
+# Survival analysis outputs
+survival_analysis/models/
+survival_analysis/data/
+survival_analysis/logs/
+survival_analysis/*.joblib
+
+# Prediction pipeline outputs
+prediction/models/
+prediction/results/
+prediction/out*/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+logs/
+*.log
+*.err
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.venv/
+env/
+venv/
