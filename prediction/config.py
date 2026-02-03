@@ -38,17 +38,22 @@ class Config:
     #     "bladder",      # Bladder cancer
     #     # "pancreatic",   # Pancreatic cancer
     # ])
+    # cancer_types: List[str] = field(default_factory=lambda: [
+    #     "lung_cancer",
+    #     "colorectal_cancer",
+    #     # "stomach_cancer",
+    #     "ischemia",
+    #     "stroke",
+    #     # "alzheimers",
+    #     "copd",
+    #     "lower_resp",
+    #     "kidney",
+    #     # "hhd",
+    #     "diabetes",
+    # ])
     cancer_types: List[str] = field(default_factory=lambda: [
-        "lung_cancer",
-        "colorectal_cancer",
-        # "stomach_cancer",
         "ischemia",
-        "stroke",
-        # "alzheimers",
-        "copd",
         "lower_resp",
-        "kidney",
-        # "hhd"
     ])
     
     

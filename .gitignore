@@ -19,7 +19,6 @@ output/
 survival_analysis/models/
 survival_analysis/data/
 survival_analysis/logs/
-survival_analysis/*.joblib
 
 # Prediction pipeline outputs
 prediction/models/

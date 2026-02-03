@@ -66,7 +66,7 @@ Exploratory and experimental notebooks:
 ### `utils/`
 Utility scripts:
 - `m3h.py` - M3H model implementation
-- `run_tabpfn.py` - TabPFN model runner
+- `tabpfn.py` - TabPFN model runner
 
 ## Data
 
