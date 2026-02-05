@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=cancer_pred
-#SBATCH --output=out/diag_pred_all_%j.out
-#SBATCH --error=out/diag_pred_all_%j.err
+#SBATCH --output=out/cancer_pred_all_%j.out
+#SBATCH --error=out/cancer_pred_all_%j.err
 #SBATCH --partition=mit_normal_gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
@@ -30,41 +30,11 @@ echo ""
 echo "=========================================="
 echo "Running XGBoost Model (1-year)"
 echo "=========================================="
-python run_prediction.py \
+python cancer_prediction.py \
     --model xgboost \
     --prediction_horizon 1.0 \
     --threshold-method f1 \
     --gpu
-
-# echo ""
-# echo "=========================================="
-# echo "Running LightGBM Model (1-year)"
-# echo "=========================================="
-# python run_prediction.py \
-#     --model lightgbm \
-#     --prediction_horizon 1.0 \
-#     --threshold-method target_recall \
-#     --gpu
-
-# echo ""
-# echo "=========================================="
-# echo "Running XGBoost Model (5-year)"
-# echo "=========================================="
-# python run_prediction.py \
-#     --model xgboost \
-#     --threshold-method target_recall \
-#     --prediction_horizon 5.0 \
-#     --gpu
-
-# echo ""
-# echo "=========================================="
-# echo "Running LightGBM Model (5-year)"
-# echo "=========================================="
-# python run_prediction.py \
-#     --model lightgbm \
-#     --prediction_horizon 5.0 \
-#     --threshold-method target_recall \
-#     --gpu
 
 echo ""
 echo "=========================================="

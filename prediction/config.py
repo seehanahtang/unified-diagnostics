@@ -29,31 +29,38 @@ class Config:
     min_followup: float = 0.0  # Minimum time before prediction window
     
     # Cancer types to predict
-    # cancer_types: List[str] = field(default_factory=lambda: [
-    #     "skin",
-    #     "breast",       # Breast cancer (female only)
-    #     "prostate",     # Prostate cancer (male only)
-    #     "lung",         # Lung cancer
-    #     "colorectal",   # Colorectal cancer
-    #     "bladder",      # Bladder cancer
-    #     # "pancreatic",   # Pancreatic cancer
-    # ])
-    # cancer_types: List[str] = field(default_factory=lambda: [
-    #     "lung_cancer",
-    #     "colorectal_cancer",
-    #     # "stomach_cancer",
-    #     "ischemia",
-    #     "stroke",
-    #     # "alzheimers",
-    #     "copd",
-    #     "lower_resp",
-    #     "kidney",
-    #     # "hhd",
-    #     "diabetes",
-    # ])
     cancer_types: List[str] = field(default_factory=lambda: [
+        "oral_pharynx_cancer",
+        "digestive_organs_cancer",       
+        "respiratory_intrathoracic_cancer",     
+        "skin_cancer",
+        "mesothelial_soft_tissue_cancer",
+        "breast_cancer",
+        "female_genital_cancer",
+        "male_genital_cancer",
+        "urinary_tract_cancer",
+        "eye_brain_cns_cancer",
+        "endocrine_cancer",
+        "ill_defined_secondary_cancer",
+        "in_situ_cancer",
+        "hematologic_cancer",
+
+        # "bone_cartilage_cancer", # get rid of this one for now
+    ])
+
+    diag_types: List[str] = field(default_factory=lambda: [
+        "lung_cancer",
+        "colorectal_cancer",
+        "stomach_cancer",
         "ischemia",
+        "stroke",
+        "alzheimers",
+        "copd",
         "lower_resp",
+        "kidney",
+        "t2d",
+        "hhd",
+        "lung",
     ])
     
     
@@ -120,9 +127,4 @@ DEMO_FEATURES = [
     'Townsend deprivation index at recruitment',
     'Smoking status', 
     'Alcohol intake frequency.',
-    'Medication for cholesterol, blood pressure or diabetes'
 ]
-
-# Sex-specific cancers
-FEMALE_ONLY_CANCERS = ["breast", "breast_cancer", "ovarian", "ovarian_cancer", "uterine", "uterine_cancer"]
-MALE_ONLY_CANCERS = ["prostate", "prostate_cancer"]

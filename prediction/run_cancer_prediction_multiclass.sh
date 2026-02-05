@@ -28,11 +28,30 @@ echo ""
 echo "=========================================="
 echo "Running XGBoost Model (1-year)"
 echo "=========================================="
-python run_prediction.py \
+python cancer_prediction.py \
     --model xgboost \
     --prediction_horizon 1.0 \
     --multiclass \
-    --no-tuning \
+    --gpu
+
+echo ""
+echo "=========================================="
+echo "Running XGBoost Model (2-year)"
+echo "=========================================="
+python cancer_prediction.py \
+    --model xgboost \
+    --prediction_horizon 2.0 \
+    --multiclass \
+    --gpu
+
+echo ""
+echo "=========================================="
+echo "Running XGBoost Model (5-year)"
+echo "=========================================="
+python cancer_prediction.py \
+    --model xgboost \
+    --prediction_horizon 5.0 \
+    --multiclass \
     --gpu
     
 

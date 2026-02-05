@@ -39,6 +39,8 @@ RANDOM_STATE = 42
 
 # Data path
 DATA_PATH = "/orcd/pool/003/dbertsim_shared/ukb/"
+models_dir = "models/"
+os.makedirs(models_dir, exist_ok=True)
 
 # Time points to evaluate (in years)
 TIME_POINTS = [0, 1, 2, 5, 10]
@@ -117,13 +119,10 @@ def get_diagnosis_types(df):
 def get_labels_current(df, diag_type):
     """
     Get binary labels for current diagnosis (time_point=0).
-    Positive: diagnosed at or before baseline (time_to_diagnosis <= 0).
+    Positive: diagnosed at or before baseline (time_to_diagnosis <= 30 days).
     """
-    time_col = f"{diag_type}_time_to_diagnosis"
-    if time_col not in df.columns:
-        return None
     # Already diagnosed at baseline
-    y = (df[time_col] <= 0).astype(int)
+    y = df[diag_type]
     return y
 
 
@@ -138,20 +137,15 @@ def get_labels_future(df, diag_type, horizon_years):
         return None
     
     # Positive: diagnosed between 30 days and horizon years
-    # (time > 0 means not diagnosed at baseline, time <= horizon means within window)
-    y = ((df[time_col] > 30/365.25) & (df[time_col] <= horizon_years)).astype(int)
+    y = ((df[diag_type] == 0) & (df[time_col] <= horizon_years)).astype(int)
     return y
-
 
 def filter_for_future_prediction(df, diag_type):
     """
     Filter out patients already diagnosed at baseline for future prediction.
-    Keep only those with time_to_diagnosis > 0 or NaN (never diagnosed).
+    Keep only those with time_to_diagnosis > 30 days (never diagnosed).
     """
-    time_col = f"{diag_type}_time_to_diagnosis"
-    if time_col not in df.columns:
-        return df
-    mask = (df[time_col] > 0) | (df[time_col].isna())
+    mask = (df[diag_type] == 0)
     return df[mask].copy()
 
 
@@ -372,6 +366,9 @@ def run_benchmark(train_df, test_df, output_dir='.'):
                 _, full_model = train_and_evaluate(
                     X_train_all, X_test_all, y_train, y_test
                 )
+
+                full_model.save_model(f"{models_dir}xgb_model_{diag_type}_{time_point}_all.json")
+                print(f"Saved model to {models_dir}xgb_model_{diag_type}_{time_point}_all.json")
                 
                 # Extract top features
                 top_features_cache[cache_key] = select_top_features(
@@ -395,7 +392,10 @@ def run_benchmark(train_df, test_df, output_dir='.'):
                     X_test = test_filtered[feature_cols].copy()
                     
                     # Train and evaluate
-                    auc, _ = train_and_evaluate(X_train, X_test, y_train, y_test)
+                    auc, model = train_and_evaluate(X_train, X_test, y_train, y_test)
+
+                    model.save_model(f"{models_dir}xgb_model_{diag_type}_{time_point}_{feature_set}.json")
+                    print(f"Saved model to {models_dir}xgb_model_{diag_type}_{time_point}_{feature_set}.json")
                     
                     print(f"    {feature_set}: AUC = {auc:.4f} "
                           f"({len(feature_cols)} features)")
@@ -433,105 +433,15 @@ def run_benchmark(train_df, test_df, output_dir='.'):
     return results_df, top_features_cache
 
 
-def create_summary_tables(results_df, output_dir='.'):
+def save_results(results_df, output_dir='.'):
     """
-    Create and save summary tables in various formats.
+    Save results to a CSV file.
     """
-    # Filter to completed results
-    completed = results_df[results_df['status'] == 'completed'].copy()
     
-    if len(completed) == 0:
-        print("No completed results to summarize.")
-        return
-    
-    # 1. Pivot table: rows = (diag_type, time_point), columns = feature_set
-    pivot_by_features = completed.pivot_table(
-        index=['diag_type', 'time_point'],
-        columns='feature_set',
-        values='auc',
-        aggfunc='first'
-    )
-    
-    # 2. Pivot table: rows = (diag_type, feature_set), columns = time_point
-    pivot_by_time = completed.pivot_table(
-        index=['diag_type', 'feature_set'],
-        columns='time_point',
-        values='auc',
-        aggfunc='first'
-    )
-    
-    # 3. Summary statistics by feature set
-    summary_by_features = completed.groupby('feature_set')['auc'].agg([
-        'mean', 'std', 'min', 'max', 'count'
-    ]).round(4)
-    
-    # 4. Summary statistics by time point
-    summary_by_time = completed.groupby('time_point')['auc'].agg([
-        'mean', 'std', 'min', 'max', 'count'
-    ]).round(4)
-    
-    # 5. Summary statistics by diagnosis
-    summary_by_diag = completed.groupby('diag_type')['auc'].agg([
-        'mean', 'std', 'min', 'max', 'count'
-    ]).round(4)
-    
-    # Save all tables
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    
-    # Full results
-    results_df.to_csv(f'{output_dir}/benchmark_results_full_{timestamp}.csv', index=False)
-    
-    # Pivot tables
-    pivot_by_features.to_csv(f'{output_dir}/benchmark_pivot_by_features_{timestamp}.csv')
-    pivot_by_time.to_csv(f'{output_dir}/benchmark_pivot_by_time_{timestamp}.csv')
-    
-    # Summary tables
-    summary_by_features.to_csv(f'{output_dir}/benchmark_summary_by_features_{timestamp}.csv')
-    summary_by_time.to_csv(f'{output_dir}/benchmark_summary_by_time_{timestamp}.csv')
-    summary_by_diag.to_csv(f'{output_dir}/benchmark_summary_by_diagnosis_{timestamp}.csv')
-    
-    # Also save a "latest" version for easy access
-    results_df.to_csv(f'{output_dir}/benchmark_results_latest.csv', index=False)
-    pivot_by_features.to_csv(f'{output_dir}/benchmark_pivot_by_features_latest.csv')
-    pivot_by_time.to_csv(f'{output_dir}/benchmark_pivot_by_time_latest.csv')
-    
-    print(f"\n{'='*60}")
-    print("SUMMARY TABLES SAVED")
-    print(f"{'='*60}")
-    print(f"\nOutput directory: {output_dir}")
-    print(f"\nFiles created:")
-    print(f"  - benchmark_results_full_{timestamp}.csv")
-    print(f"  - benchmark_pivot_by_features_{timestamp}.csv")
-    print(f"  - benchmark_pivot_by_time_{timestamp}.csv")
-    print(f"  - benchmark_summary_by_features_{timestamp}.csv")
-    print(f"  - benchmark_summary_by_time_{timestamp}.csv")
-    print(f"  - benchmark_summary_by_diagnosis_{timestamp}.csv")
-    print(f"  - benchmark_results_latest.csv (for easy access)")
-    
-    # Print summary tables
-    print(f"\n{'='*60}")
-    print("SUMMARY BY FEATURE SET")
-    print(f"{'='*60}")
-    print(summary_by_features.to_string())
-    
-    print(f"\n{'='*60}")
-    print("SUMMARY BY TIME POINT")
-    print(f"{'='*60}")
-    print(summary_by_time.to_string())
-    
-    print(f"\n{'='*60}")
-    print("SUMMARY BY DIAGNOSIS")
-    print(f"{'='*60}")
-    print(summary_by_diag.to_string())
-    
-    return {
-        'pivot_by_features': pivot_by_features,
-        'pivot_by_time': pivot_by_time,
-        'summary_by_features': summary_by_features,
-        'summary_by_time': summary_by_time,
-        'summary_by_diag': summary_by_diag
-    }
-
+    # Save results to a CSV file
+    results_df.to_csv(f'{output_dir}xgb_benchmark_results.csv', index=False)
+   
+    return results_df
 
 # =============================================================================
 # Main Entry Point
@@ -580,8 +490,8 @@ def main():
         train_df, test_df, output_dir=args.output_dir
     )
     
-    # Create summary tables
-    summaries = create_summary_tables(results_df, output_dir=args.output_dir)
+    # Create results file
+    results_df = save_results(results_df, output_dir=args.output_dir)
     
     # Save top features
     top_features_list = []
@@ -599,16 +509,16 @@ def main():
     if top_features_list:
         top_features_df = pd.DataFrame(top_features_list)
         top_features_df.to_csv(
-            f'{args.output_dir}/top_features_per_condition.csv', 
+            f'{args.output_dir}top_features_per_condition.csv', 
             index=False
         )
-        print(f"\nSaved top features to: {args.output_dir}/top_features_per_condition.csv")
+        print(f"\nSaved top features to: {args.output_dir}top_features_per_condition.csv")
     
     print("\n" + "=" * 60)
     print("BENCHMARK COMPLETE")
     print("=" * 60)
     
-    return results_df, summaries
+    return results_df
 
 
 if __name__ == '__main__':

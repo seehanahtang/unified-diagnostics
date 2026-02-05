@@ -13,7 +13,7 @@ import xgboost as xgb
 import lightgbm as lgb
 import optuna
 from optuna.samplers import TPESampler
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, log_loss
 
 from config import config
 
@@ -72,12 +72,14 @@ def objective_xgb(
     
     if num_classes == 2:
         preds = model.predict_proba(X_valid)[:, 1]
-        auc = roc_auc_score(y_valid, preds)
+        score = roc_auc_score(y_valid, preds)
     else:
         preds = model.predict_proba(X_valid)
-        auc = roc_auc_score(y_valid, preds, multi_class='ovr', average='weighted')
+        # Use negative log loss for multiclass (since we maximize, and lower log_loss is better)
+        # This handles missing classes in validation set, unlike roc_auc_score
+        score = -log_loss(y_valid, preds, labels=list(range(num_classes)))
     
-    return auc
+    return score
 
 
 def train_xgboost_with_tuning(
@@ -132,7 +134,10 @@ def train_xgboost_with_tuning(
         best_params['eval_metric'] = 'mlogloss'
         best_params['num_class'] = num_classes
     
-    logger.info(f"Best AUC: {study.best_value:.4f}")
+    if num_classes == 2:
+        logger.info(f"Best AUC: {study.best_value:.4f}")
+    else:
+        logger.info(f"Best neg log loss: {study.best_value:.4f}")
     logger.info(f"Best params: {best_params}")
     
     # Train final model with best parameters
@@ -316,12 +321,14 @@ def objective_lgb(
     
     if num_classes == 2:
         preds = model.predict_proba(X_valid)[:, 1]
-        auc = roc_auc_score(y_valid, preds)
+        score = roc_auc_score(y_valid, preds)
     else:
         preds = model.predict_proba(X_valid)
-        auc = roc_auc_score(y_valid, preds, multi_class='ovr', average='weighted')
+        # Use negative log loss for multiclass (since we maximize, and lower log_loss is better)
+        # This handles missing classes in validation set, unlike roc_auc_score
+        score = -log_loss(y_valid, preds, labels=list(range(num_classes)))
     
-    return auc
+    return score
 
 
 def train_lightgbm_with_tuning(
@@ -376,7 +383,10 @@ def train_lightgbm_with_tuning(
         best_params['num_class'] = num_classes
     best_params['verbosity'] = -1
     
-    logger.info(f"Best AUC: {study.best_value:.4f}")
+    if num_classes == 2:
+        logger.info(f"Best AUC: {study.best_value:.4f}")
+    else:
+        logger.info(f"Best neg log loss: {study.best_value:.4f}")
     logger.info(f"Best params: {best_params}")
     
     # Train final model with best parameters

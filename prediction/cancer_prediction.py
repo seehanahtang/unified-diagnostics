@@ -13,16 +13,17 @@ import argparse
 import logging
 import random
 from typing import Dict, Any, List, Optional
+from sklearn.model_selection import train_test_split
 
 import pandas as pd
 import numpy as np
 
 from config import config, setup_directories, setup_logging
 from data_loader import (
-    load_datasets, load_tabtext_embeddings, preprocess, 
+    load_cancer_datasets, load_tabtext_embeddings, preprocess, 
     get_feature_columns, merge_tabtext_embeddings, get_X,
-    filter_cohort_by_time, filter_by_sex, filter_high_missingness,
-    get_y, get_y_multiclass
+    filter_cohort_by_time_multiclass,
+    get_y_multiclass
 )
 from models import train_model
 from evaluator import (
@@ -68,7 +69,11 @@ def run_cancer_prediction_pipeline(
     logger.info("=" * 60)
     
     # Load data
-    train_df, valid_df, test_df = load_datasets()
+    train_valid_df, test_df = load_cancer_datasets()
+    train_valid_df = get_y(train_valid_df, cancer_type, prediction_horizon)
+    test_df = get_y(test_df, cancer_type, prediction_horizon)
+
+    train_df, valid_df = train_test_split(train_valid_df, test_size=0.15, random_state=config.random_state, stratify=train_valid_df["outcome"])
     
     # Preprocess
     logger.info("Preprocessing data...")
@@ -81,15 +86,10 @@ def run_cancer_prediction_pipeline(
     valid_df = merge_tabtext_embeddings(valid_df)
     test_df = merge_tabtext_embeddings(test_df)
     
-    # Filter by sex for sex-specific cancers
-    train_df = filter_by_sex(train_df, cancer_type)
-    valid_df = filter_by_sex(valid_df, cancer_type)
-    test_df = filter_by_sex(test_df, cancer_type)
-    
     # Filter by time (exclude patients already diagnosed)
-    train_df = filter_cohort_by_time(train_df, cancer_type, start_year=0.0)
-    valid_df = filter_cohort_by_time(valid_df, cancer_type, start_year=0.0)
-    test_df = filter_cohort_by_time(test_df, cancer_type, start_year=0.0)
+    train_df = filter_cohort_by_time(train_df, cancer_type)
+    valid_df = filter_cohort_by_time(valid_df, cancer_type)
+    test_df = filter_cohort_by_time(test_df, cancer_type)
     
     # Get feature columns
     feature_cols = get_feature_columns(
@@ -108,36 +108,12 @@ def run_cancer_prediction_pipeline(
     X_valid = get_X(valid_df, feature_cols)
     X_test = get_X(test_df, feature_cols)
     
-    y_train = get_y(train_df, cancer_type, prediction_horizon)
-    y_valid = get_y(valid_df, cancer_type, prediction_horizon)
-    y_test = get_y(test_df, cancer_type, prediction_horizon)
-    
-    # Filter patients with >50% missing values
-    # X_train, y_train = filter_high_missingness(X_train, y_train, threshold=0.5)
-    # X_valid, y_valid = filter_high_missingness(X_valid, y_valid, threshold=0.5)
-    # X_test, y_test = filter_high_missingness(X_test, y_test, threshold=0.5)
+    y_train = train_df["outcome"]
+    y_valid = valid_df["outcome"]
+    y_test = test_df["outcome"]
 
     # Log class distribution for entire dataset (combined train + valid + test)
-    y_all = pd.concat([y_train, y_valid, y_test])
-    total_samples = len(y_all)
-    count = y_all.sum()
-    pct = count / total_samples * 100
-    logger.info(f"Overall: {count} ({pct:.2f}%)")
-    
-    # Check for sufficient positive samples
-    if y_train.sum() < 2:
-        logger.warning(f"Insufficient positive samples in training set ({y_train.sum()})")
-        return {
-            'cancer_type': cancer_type,
-            'status': 'skipped',
-            'reason': 'insufficient_positive_samples'
-        }
-    
-    # Check for inverted prevalence
-    train_prevalence = y_train.mean()
-    if train_prevalence > 0.5:
-        logger.warning(f"HIGH PREVALENCE WARNING: {train_prevalence:.2%} positive cases")
-        logger.warning("This may indicate inverted labels. Expected ~1-5% for most cancers.")
+    logger.info(f"Train: {y_train.sum()}, Valid: {y_valid.sum()}, Test: {y_test.sum()}")
     
     # Train model
     model, best_params = train_model(
@@ -226,6 +202,8 @@ def run_multiclass_pipeline(
     model_type: str = "xgboost",
     use_tuning: bool = True,
     n_trials: int = 50,
+    threshold_method: str = "target_recall",
+    target_recall: float = 0.8,
     save_results: bool = True
 ) -> Dict[str, Any]:
     """
@@ -244,76 +222,55 @@ def run_multiclass_pipeline(
         Dictionary with results and metrics
     """
     logger.info("=" * 60)
-    logger.info("Multiclass Cancer Type Prediction Pipeline")
-    logger.info(f"Cancer types: {config.cancer_types}")
+    logger.info(f"Cancer Prediction Pipeline: Multiclass")
     logger.info(f"Prediction horizon: {prediction_horizon} years")
     logger.info(f"Model: {model_type}, Tuning: {use_tuning}")
+    logger.info(f"Threshold method: {threshold_method}" + (f" (target={target_recall})" if threshold_method == 'target_recall' else ""))
     logger.info("=" * 60)
     
     # Load data
-    train_df, valid_df, test_df = load_datasets()
+    train_valid_df, test_df = load_cancer_datasets()
+    train_valid_df, class_mapping = get_y_multiclass(train_valid_df, config.cancer_types, prediction_horizon)
+    test_df, class_mapping = get_y_multiclass(test_df, config.cancer_types, prediction_horizon)
     
     # Preprocess
     logger.info("Preprocessing data...")
-    train_df = preprocess(train_df, onehot=True)
-    valid_df = preprocess(valid_df, onehot=True)
+    train_valid_df = preprocess(train_valid_df, onehot=True)
     test_df = preprocess(test_df, onehot=True)
     
     # Merge tabtext embeddings
-    train_df = merge_tabtext_embeddings(train_df)
-    valid_df = merge_tabtext_embeddings(valid_df)
+    train_valid_df = merge_tabtext_embeddings(train_valid_df)
     test_df = merge_tabtext_embeddings(test_df)
     
-    train_df = filter_cohort_by_time(train_df, "cancer", start_year=0.0)
-    valid_df = filter_cohort_by_time(valid_df, "cancer", start_year=0.0)
-    test_df = filter_cohort_by_time(test_df, "cancer", start_year=0.0)
+    # Filter by time (exclude patients already diagnosed)
+    train_valid_df = filter_cohort_by_time_multiclass(train_valid_df, config.cancer_types)
+    test_df = filter_cohort_by_time_multiclass(test_df, config.cancer_types)
     
-    # Get feature columns (no sex filtering for multiclass - all patients)
+    
+    # Get feature columns
     feature_cols = get_feature_columns(
-        train_df,
+        train_valid_df,
         use_olink=config.use_olink,
         use_blood=config.use_blood,
         use_demo=config.use_demo,
         use_tabtext=config.use_tabtext,
-        cancer_type=None
-    )
+    )   
     logger.info(f"Total features: {len(feature_cols)}")
+
+    train_df, valid_df = train_test_split(train_valid_df, test_size=0.15, random_state=config.random_state, stratify=train_valid_df["outcome"])
     
-    # Extract features
+    
+    # Extract features and labels
     X_train = get_X(train_df, feature_cols)
     X_valid = get_X(valid_df, feature_cols)
     X_test = get_X(test_df, feature_cols)
     
-    # Get multiclass labels
-    y_train, class_mapping = get_y_multiclass(train_df, config.cancer_types, prediction_horizon)
-    y_valid, _ = get_y_multiclass(valid_df, config.cancer_types, prediction_horizon)
-    y_test, _ = get_y_multiclass(test_df, config.cancer_types, prediction_horizon)
-    
-    # Filter patients with >50% missing values
-    # X_train, y_train = filter_high_missingness(X_train, y_train, threshold=0.5)
-    # X_valid, y_valid = filter_high_missingness(X_valid, y_valid, threshold=0.5)
-    # X_test, y_test = filter_high_missingness(X_test, y_test, threshold=0.5)
-    
-    num_classes = len(class_mapping)
-    logger.info(f"Number of classes: {num_classes}")
-    
+    y_train = train_df["outcome"]
+    y_valid = valid_df["outcome"]
+    y_test = test_df["outcome"]
+
     # Log class distribution for entire dataset (combined train + valid + test)
-    y_all = pd.concat([y_train, y_valid, y_test])
-    total_samples = len(y_all)
-    logger.info(f"\n{'='*60}")
-    logger.info(f"Class Distribution (Entire Dataset - {total_samples} samples):")
-    logger.info(f"{'='*60}\n")
-    for class_id, class_name in class_mapping.items():
-        count = (y_all == class_id).sum()
-        pct = count / total_samples * 100
-        logger.info(f"  Class {class_id} ({class_name}): {count} ({pct:.2f}%)")
-    
-    n_no_cancer = (y_all == 0).sum()
-    n_any_cancer = (y_all > 0).sum()
-    logger.info(f"\nBinary Summary:")
-    logger.info(f"  No Cancer:  {n_no_cancer} ({n_no_cancer/total_samples*100:.2f}%)")
-    logger.info(f"  Any Cancer: {n_any_cancer} ({n_any_cancer/total_samples*100:.2f}%)")
-    logger.info(f"{'='*60}\n")
+    logger.info(f"Train: {y_train.sum()}, Valid: {y_valid.sum()}, Test: {y_test.sum()}")
     
     # Train model
     model, best_params = train_model(
@@ -321,7 +278,7 @@ def run_multiclass_pipeline(
         model_type=model_type,
         use_tuning=use_tuning,
         n_trials=n_trials,
-        num_classes=num_classes
+        num_classes=len(config.cancer_types)+1
     )
     
     # Evaluate on validation set
@@ -366,7 +323,7 @@ def run_multiclass_pipeline(
         'classification_mode': 'multiclass',
         'model_type': model_type,
         'prediction_horizon': prediction_horizon,
-        'num_classes': num_classes,
+        'num_classes': len(config.cancer_types)+1,
         'class_mapping': str(class_mapping),
         'n_train': len(y_train),
         'n_valid': len(y_valid),

@@ -8,8 +8,9 @@ import numpy as np
 import pandas as pd
 import logging
 from typing import List, Optional, Tuple
+from sklearn.model_selection import train_test_split
 
-from config import config, DEMO_FEATURES, FEMALE_ONLY_CANCERS, MALE_ONLY_CANCERS
+from config import config, DEMO_FEATURES
 
 logger = logging.getLogger(__name__)
 
@@ -34,25 +35,53 @@ def load_tabtext_embeddings():
         config.use_tabtext = False
 
 
-def load_datasets() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_cancer_datasets() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Load train, validation, and test datasets.
+    
+    Creates a validation set by splitting the training data since the original
+    data only has train and test splits. Validation set is needed for Optuna
+    hyperparameter tuning.
+    
+    Args:
+        valid_size: Fraction of training data to use for validation (default 0.15)
     
     Returns:
         Tuple of (train_df, valid_df, test_df)
     """
-    logger.info("Loading datasets...")
-    # train_df = pd.read_csv(f'{config.data_dir}ukb_cancer_train_with_skin.csv')
-    # valid_df = pd.read_csv(f'{config.data_dir}ukb_cancer_valid_with_skin.csv')
-    # test_df = pd.read_csv(f'{config.data_dir}ukb_cancer_test_with_skin.csv')
+    logger.info("Loading cancer datasets...")
     
+    # Load original train and test sets
+    train_df = pd.read_csv(f'{config.data_dir}ukb_cancer_train_new.csv')
+    test_df = pd.read_csv(f'{config.data_dir}ukb_cancer_test_new.csv')
+    
+    logger.info(f"Original Train: {len(train_df)}, Test: {len(test_df)}")
+    return train_df, test_df
+
+
+def load_diag_datasets() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Load train, validation, and test datasets.
+    
+    Creates a validation set by splitting the training data since the original
+    data only has train and test splits. Validation set is needed for Optuna
+    hyperparameter tuning.
+    
+    Args:
+        valid_size: Fraction of training data to use for validation (default 0.15)
+    
+    Returns:
+        Tuple of (train_df, valid_df, test_df)
+    """
+    logger.info("Loading diag datasets...")
+    
+    # Load original train and test sets
     train_df = pd.read_csv(f'{config.data_dir}ukb_diag_train.csv')
-    valid_df = pd.read_csv(f'{config.data_dir}ukb_diag_valid.csv')
     test_df = pd.read_csv(f'{config.data_dir}ukb_diag_test.csv')
     
-    logger.info(f"Train: {len(train_df)}, Valid: {len(valid_df)}, Test: {len(test_df)}")
+    logger.info(f"Original Train: {len(train_df)}, Test: {len(test_df)}")
     
-    return train_df, valid_df, test_df
+    return train_df, test_df
 
 
 def preprocess(df: pd.DataFrame, onehot: bool = False) -> pd.DataFrame:
@@ -138,7 +167,6 @@ def get_feature_columns(
     use_blood: bool = True,
     use_demo: bool = True,
     use_tabtext: bool = True,
-    cancer_type: Optional[str] = None
 ) -> List[str]:
     """
     Get feature columns based on configuration.
@@ -217,33 +245,6 @@ def merge_tabtext_embeddings(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def sanitize_feature_names(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Sanitize feature names to remove special characters that LightGBM doesn't support.
-    
-    Args:
-        df: DataFrame with potentially problematic column names
-        
-    Returns:
-        DataFrame with sanitized column names
-    """
-    import re
-    
-    def clean_name(name: str) -> str:
-        # Replace special JSON characters and other problematic chars
-        name = re.sub(r'[\[\]{}:,"\'\\]', '_', name)
-        # Replace spaces and dots with underscores
-        name = name.replace(' ', '_').replace('.', '_')
-        # Remove multiple consecutive underscores
-        name = re.sub(r'_+', '_', name)
-        # Remove leading/trailing underscores
-        name = name.strip('_')
-        return name
-    
-    new_columns = {col: clean_name(col) for col in df.columns}
-    return df.rename(columns=new_columns)
-
-
 def get_X(
     df: pd.DataFrame,
     feature_cols: List[str]
@@ -255,8 +256,6 @@ def get_X(
         logger.warning(f"Missing columns: {missing_cols}")
     
     X = df[available_cols].copy()
-    # Sanitize column names for LightGBM compatibility
-    X = sanitize_feature_names(X)
     return X
 
 
@@ -293,67 +292,76 @@ def filter_high_missingness(
 
 def filter_cohort_by_time(
     df: pd.DataFrame, 
-    cancer_type: str, 
-    start_year: float = 0.0
+    diag_type: str, 
 ) -> pd.DataFrame:
     """
     Filter cohort by time to diagnosis.
-    Excludes patients who were diagnosed before the start year.
+    Excludes patients who were diagnosed before the 30 days.
     
     Args:
         df: Input dataframe
-        cancer_type: Cancer type column prefix
-        start_year: Minimum years before diagnosis to include
+        diag_type: Diagnosis type column prefix
         
     Returns:
         Filtered dataframe
     """
-    time_col = f'{cancer_type}_time_to_diagnosis'
+    time_col = f'{diag_type}_time_to_diagnosis'
     if time_col not in df.columns:
         logger.warning(f"Time column {time_col} not found")
         return df
         
-    # Include if: no diagnosis (NaN) OR diagnosis is after start_year
-    mask = (df[time_col] > start_year) | (df[time_col].isna())
+    # Include if: no diagnosis (NaN) OR diagnosis is after 30 days
+    mask = (df[time_col] > 30/365.25) | (df[time_col].isna())
     filtered_df = df.loc[mask].copy()
     
-    logger.info(f"Filtered {cancer_type}: {len(df)} -> {len(filtered_df)} samples")
+    logger.info(f"Filtered {diag_type}: {len(df)} -> {len(filtered_df)} samples")
     return filtered_df
 
-
-def filter_by_sex(
+def filter_cohort_by_time_multiclass(
     df: pd.DataFrame, 
-    cancer_type: str
+    cancer_types: List[str], 
 ) -> pd.DataFrame:
-    """Filter by sex for sex-specific cancers."""
-    if cancer_type in FEMALE_ONLY_CANCERS:
-        if 'Sex_male' in df.columns:
-            df = df[df['Sex_male'] == 0].copy()
-            logger.info(f"Filtered to females only for {cancer_type}")
-    elif cancer_type in MALE_ONLY_CANCERS:
-        if 'Sex_male' in df.columns:
-            df = df[df['Sex_male'] == 1].copy()
-            logger.info(f"Filtered to males only for {cancer_type}")
-    return df
+    """
+    Filter cohort by time to diagnosis.
+    Excludes patients who were diagnosed before the 30 days.
+    
+    Args:
+        df: Input dataframe
+        diag_type: Diagnosis type column prefix
+        
+    Returns:
+        Filtered dataframe
+    """
+    time_cols = [f'{cancer_type}_time_to_diagnosis' for cancer_type in cancer_types]
+    if not all(col in df.columns for col in time_cols):
+        logger.warning(f"Time columns {time_cols} not found")
+        return df
+        
+    # Include if: no diagnosis (NaN) OR diagnosis is after 30 days
+    mask = ((df[config.cancer_types] == 0).all(axis=1) | (df[time_cols].isna()).all(axis=1))
+    filtered_df = df.loc[mask].copy()
+    
+    logger.info(f"Filtered {cancer_types}: {len(df)} -> {len(filtered_df)} samples")
+    return filtered_df
 
 
 def get_y(
     df: pd.DataFrame, 
-    cancer_type: str,
+    diag_type: str,
     prediction_window: float = 1.0
 ) -> pd.Series:
     """
-    Get binary labels for cancer prediction within prediction window.
+    Get binary labels for diagnosis prediction within prediction window.
     
     Args:
         df: Input dataframe
-        cancer_type: Cancer type column prefix
+        diag_type: Diagnosis type column prefix
         prediction_window: Years within which to predict cancer
         
     Returns:
         Binary labels (1 if diagnosed within window, 0 otherwise)
     """
-    time_col = f"{cancer_type}_time_to_diagnosis"
+    time_col = f"{diag_type}_time_to_diagnosis"
     if time_col not in df.columns:
         raise ValueError(f"Column {time_col} not found")
     
@@ -364,7 +372,7 @@ def get_y(
     n_total = len(y)
     prevalence = n_positive / n_total if n_total > 0 else 0
     
-    logger.info(f"{cancer_type}: {n_positive}/{n_total} positive ({prevalence:.4f})")
+    logger.info(f"{diag_type}: {n_positive}/{n_total} positive ({prevalence:.4f})")
     
     return y
 
@@ -377,10 +385,14 @@ def get_y_multiclass(
     """
     Get multiclass labels for cancer type prediction within prediction window.
     
+    Label assignment logic:
+        - If any cancer has positive time_to_diagnosis (future diagnosis):
+          Assign the cancer that was diagnosed FIRST (smallest positive time)
+        - If no cancer diagnosis data (all NaN): label as "no_cancer"
+    
     Classes:
-        0: No cancer within prediction window
+        0: No cancer
         1 to N: Specific cancer types (from cancer_types list)
-        N+1: Other cancer (from cancer_time_to_diagnosis but not in cancer_types)
     
     Args:
         df: Input dataframe
@@ -390,34 +402,48 @@ def get_y_multiclass(
     Returns:
         Tuple of (multiclass labels, class mapping dict)
     """
-    # Initialize all as 0 (no cancer)
-    y = pd.Series(0, index=df.index)
-    
-    # Create class mapping: 0=no_cancer, 1-N=specific cancers, N+1=other
+    # Create class mapping: 0=no_cancer, 1-N=specific cancers
     class_mapping = {0: 'no_cancer'}
     for i, cancer_type in enumerate(cancer_types, start=1):
         class_mapping[i] = cancer_type
-    other_class = len(cancer_types) + 1
-    class_mapping[other_class] = 'other_cancer'
     
-    # Check for "other" cancer using the general cancer column
-    other_col = "cancer_time_to_diagnosis"
-    if other_col in df.columns:
-        other_mask = (df[other_col] > 0) & (df[other_col] <= prediction_window)
-        y.loc[other_mask] = other_class
-        logger.info(f"Any cancer: {other_mask.sum()} within {prediction_window} years")
-    
-    # Override with specific cancer types (priority to specific over "other")
-    # Process in reverse order so earlier cancers in list have priority
-    for i, cancer_type in reversed(list(enumerate(cancer_types, start=1))):
+    # Build a DataFrame of time_to_diagnosis for all cancer types
+    time_cols = []
+    valid_cancer_types = []
+    for cancer_type in cancer_types:
         time_col = f"{cancer_type}_time_to_diagnosis"
-        if time_col not in df.columns:
+        if time_col in df.columns:
+            time_cols.append(time_col)
+            valid_cancer_types.append(cancer_type)
+        else:
             logger.warning(f"Column {time_col} not found, skipping")
-            continue
-        
-        # Mark as this cancer type if diagnosed within window
-        mask = (df[time_col] > 0) & (df[time_col] <= prediction_window)
-        y.loc[mask] = i
+    
+    if not time_cols:
+        logger.warning("No cancer time columns found, returning all no_cancer")
+        y = pd.Series(0, index=df.index)
+        return y, class_mapping
+    
+    # Create DataFrame with time values for each cancer type
+    time_df = df[time_cols].copy()
+    time_df.columns = valid_cancer_types  # Rename to cancer type names
+    
+    # Initialize labels as 0 (no cancer)
+    y = pd.Series(0, index=df.index, dtype=int)
+    
+    # Positive time values (future diagnoses within prediction window)
+    # Mask out values that are not positive or exceed prediction window
+    positive_df = time_df.where((time_df > 0) & (time_df <= prediction_window))
+    
+    # Find rows with at least one positive value
+    has_positive = positive_df.notna().any(axis=1)
+    
+    # For rows with positive values, find the cancer with minimum time (diagnosed first)
+    if has_positive.any():
+        # idxmin returns the column name with minimum value per row
+        first_cancer = positive_df.loc[has_positive].idxmin(axis=1)
+        # Map cancer type name to class index
+        cancer_to_class = {ct: i + 1 for i, ct in enumerate(cancer_types) if ct in valid_cancer_types}
+        y.loc[has_positive] = first_cancer.map(cancer_to_class)
     
     # Log class distribution
     logger.info("Multiclass distribution:")
@@ -426,4 +452,5 @@ def get_y_multiclass(
         pct = count / len(y) * 100 if len(y) > 0 else 0
         logger.info(f"  {class_id}: {class_name} - {count} ({pct:.2f}%)")
     
-    return y, class_mapping
+    df["outcome"] = y
+    return df, class_mapping

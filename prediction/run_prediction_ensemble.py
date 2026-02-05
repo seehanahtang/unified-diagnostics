@@ -22,7 +22,7 @@ import lightgbm as lgb
 
 from config import config, setup_directories, setup_logging
 from data_loader import (
-    load_datasets, load_tabtext_embeddings, preprocess, filter_other_cancers,
+    load_cancer_datasets, load_tabtext_embeddings, preprocess, filter_other_cancers,
     get_feature_columns, merge_tabtext_embeddings, get_X,
     filter_cohort_by_time, filter_by_sex, filter_high_missingness,
     get_y
@@ -154,7 +154,7 @@ def run_ensemble_pipeline(
     logger.info("=" * 60)
     
     # Load data
-    train_df, valid_df, test_df = load_datasets()
+    train_df, valid_df, test_df = load_cancer_datasets()
     
     # Preprocess
     logger.info("Preprocessing data...")
