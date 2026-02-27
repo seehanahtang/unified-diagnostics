@@ -49,7 +49,7 @@ def setup_logger(log_dir: str, name: str = "ukb_rsf_cancer_risk_only") -> loggin
 # -----------------------
 # Config
 # -----------------------
-data_path = "/orcd/pool/003/dbertsim_shared/ukb"
+data_path = "/orcd/pool/003/dbertsim_shared/ukb/"
 logger = setup_logger("logs")
 
 DEMO_FEATURES = [
@@ -64,7 +64,33 @@ DEMO_FEATURES = [
     'Alcohol intake frequency.',
     # 'Medication for cholesterol, blood pressure or diabetes'
 ]
-outcomes = ["skin", "breast", "prostate", "lung", "colorectal", "bladder"]
+# outcomes = ["skin_cancer",
+#         "breast_cancer",
+#         "prostate_cancer",
+#         "colorectal_cancer",
+#         "lung_cancer",
+#         "lymphoma_cancer",
+#         "kidney_cancer",
+#         "leukemia_cancer",
+#         "bladder_cancer",
+#         "pancreatic_cancer",
+#         "brain_cancer",
+#         "stomach_cancer"]
+outcomes = ["oral_pharynx_cancer",
+        "digestive_organs_cancer",       
+        "respiratory_intrathoracic_cancer",     
+        "skin_cancer",
+        "mesothelial_soft_tissue_cancer",
+        "breast_cancer",
+        "female_genital_cancer",
+        "male_genital_cancer",
+        "urinary_tract_cancer",
+        "eye_brain_cns_cancer",
+        "endocrine_cancer",
+        "ill_defined_secondary_cancer",
+        "in_situ_cancer",
+        "hematologic_cancer",
+]
 CATEGORICAL_DEMO = ["Ethnic background", "Smoking status", "Alcohol intake frequency."]
 
 # -----------------------
@@ -87,15 +113,12 @@ def merge_tabtext(df):
 
 def clean_future(df, outcome): 
     # Restrict to future
-    if outcome == "cancer":
-        df = df.loc[df["cancer"] == 0].copy()
-    else:
-        df = df.loc[df[f"{outcome}_cancer"] == 0].copy()
+    df = df.loc[df[f"{outcome}"] == 0].copy()
     df.loc[:, f"{outcome}_future"] = 0
     df.loc[df[f"{outcome}_time_to_diagnosis"] > 0, f"{outcome}_future"] = 1
     
     mask = df[f"{outcome}_future"] == 0
-    df.loc[mask, f'{outcome}_time_to_diagnosis'] = df.loc[mask, 'time_to_follow_up']
+    df.loc[mask, f'{outcome}_time_to_diagnosis'] = 20.0
     
     protein_cols = [c for c in df.columns if (c.startswith('olink_'))]
     
@@ -230,159 +253,112 @@ def get_cancer_model_features(df, X, outcome, rsf):
 # -----------------------
 # Load data
 # -----------------------
-# logger.info("Loading train/test (combining train and valid)...")
-# df_train_base = pd.read_csv(f"{data_path}/ukb_cancer_train_with_skin.csv")
-# df_valid_base = pd.read_csv(f"{data_path}/ukb_cancer_valid_with_skin.csv")
-# df_train_base = pd.concat([df_train_base, df_valid_base], axis=0)
-# df_test_base  = pd.read_csv(f"{data_path}/ukb_cancer_test_with_skin.csv")
+df_train_base = pd.read_csv(f'{data_path}ukb_cancer_train_new.csv')
+df_test_base = pd.read_csv(f'{data_path}ukb_cancer_test_new.csv')
 
     
-# for outcome in outcomes:
-#     logger.info("=" * 80)
-#     logger.info(f"Starting outcome: {outcome}")
+for outcome in outcomes:
+    logger.info("=" * 80)
+    logger.info(f"Starting outcome: {outcome}")
     
-#     df_train = df_train_base.copy()
-#     df_test  = df_test_base.copy()
+    df_train = df_train_base.copy()
+    df_test  = df_test_base.copy()
     
-#     # Clean + merge embeddings
-#     df_train = clean_future(df_train, outcome)
-#     df_train = merge_tabtext(df_train)
+    # Clean + merge embeddings
+    df_train = clean_future(df_train, outcome)
+    df_train = merge_tabtext(df_train)
     
-#     df_test = clean_future(df_test, outcome)
-#     df_test = merge_tabtext(df_test)
+    df_test = clean_future(df_test, outcome)
+    df_test = merge_tabtext(df_test)
     
-#     sis_cols = get_selected_features(df_train, outcome)
-#     feature_cols = DEMO_FEATURES + sis_cols
-#     X_train = df_train[feature_cols]
-#     X_test = df_test[feature_cols]
-#     X_train, X_test = encode_demo(X_train, X_test)
+    sis_cols = get_selected_features(df_train, outcome)
+    feature_cols = DEMO_FEATURES + sis_cols
+    X_train = df_train[feature_cols]
+    X_test = df_test[feature_cols]
+    X_train, X_test = encode_demo(X_train, X_test)
     
-#     logger.info(f"Selected {len(feature_cols)} demo and sis features")
+    logger.info(f"Selected {len(feature_cols)} demo and sis features")
     
-#     y_train = Surv.from_dataframe(f"{outcome}_future", f"{outcome}_time_to_diagnosis", df_train)
-#     y_test  = Surv.from_dataframe(f"{outcome}_future", f"{outcome}_time_to_diagnosis", df_test)
-
-    
-#     # survial random forest 
-#     logger.info("Training random forest...")
-#     rsf = RandomSurvivalForest(
-#         n_estimators=100,
-#         min_samples_split=10,
-#         min_samples_leaf=100,
-#         max_depth = 10,
-#         max_features="sqrt",
-#         n_jobs=-1,
-#         random_state=42
-#     )
-    
-#     t0 = time.time()
-#     rsf.fit(X_train, y_train)
-#     logger.info(f"[{outcome}] Fit RSF done in {(time.time()-t0)/60:.1f}min")
-
-#     # dump(rsf, f"models/rsf_{outcome}_sis.joblib")  
-#     # logger.info(f"[{outcome}] Saved model as models/rsf_{outcome}_sis.joblib")
-    
-#     t1 = time.time()
-#     y_pred = rsf.predict(X_test)
-#     logger.info(f"[{outcome}] Predicted in {(time.time()-t1):.1f}s")
-    
-#     c_index = concordance_index_censored(y_test[f"{outcome}_future"], y_test[f"{outcome}_time_to_diagnosis"], y_pred)
-#     logger.info(f"[{outcome}] C-index = {c_index[0]:.4f}")
-
-#     # Overall event rate + mean time among events
-#     overall = pd.concat([df_train, df_test], ignore_index=True)
-#     overall_rate = overall[f"{outcome}_future"].mean()
-#     mean_event_time = overall.loc[overall[f"{outcome}_future"] == 1, f"{outcome}_time_to_diagnosis"].mean()
-#     logger.info(f"[{outcome}] Overall event_rate={overall_rate:.4f} | mean_event_time={mean_event_time:.3f}")
-    
-#     # logger.info(f"[{outcome}] Writing train and test datasets to data/data/cancer_train_with_sis_selected_features_{outcome}.csv")
-#     # df_train.to_csv(f"data/cancer_train_with_sis_selected_features_{outcome}.csv", index=False)
-#     # df_test.to_csv(f"data/cancer_test_with_sis_selected_features_{outcome}.csv", index=False)
-    
-#     # Add risk columns
-#     df_train = get_cancer_model_features(df_train, X_train, outcome, rsf)
-#     df_test  = get_cancer_model_features(df_test,  X_test,  outcome, rsf)
-    
-#     risk_cols = [c for c in df_train.columns if c.startswith(f"{outcome}_risk_") or c.startswith(f"{outcome}_delta_")]
-#     df_train_base = df_train_base.merge(df_train[["eid"] + risk_cols], on="eid", how="left")
-#     df_test_base  = df_test_base.merge(df_test[["eid"] + risk_cols],  on="eid", how="left")
+    y_train = Surv.from_dataframe(f"{outcome}_future", f"{outcome}_time_to_diagnosis", df_train)
+    y_test  = Surv.from_dataframe(f"{outcome}_future", f"{outcome}_time_to_diagnosis", df_test)
 
     
-# logger.info("=" * 80)
-# outcome = "cancer"
-# logger.info(f"Starting outcome: {outcome}")
+    # survial random forest 
+    logger.info("Training random forest...")
+    rsf = RandomSurvivalForest(
+        n_estimators=100,
+        min_samples_split=10,
+        min_samples_leaf=100,
+        max_depth = 10,
+        max_features="sqrt",
+        n_jobs=-1,
+        random_state=42
+    )
+    
+    t0 = time.time()
+    rsf.fit(X_train, y_train)
+    logger.info(f"[{outcome}] Fit RSF done in {(time.time()-t0)/60:.1f}min")
 
-# df_train = df_train_base.copy()
-# df_test  = df_test_base.copy()
+    # dump(rsf, f"models/rsf_{outcome}_sis.joblib")  
+    # logger.info(f"[{outcome}] Saved model as models/rsf_{outcome}_sis.joblib")
+    
+    t1 = time.time()
+    y_pred = rsf.predict(X_test)
+    logger.info(f"[{outcome}] Predicted in {(time.time()-t1):.1f}s")
+    
+    c_index = concordance_index_censored(y_test[f"{outcome}_future"], y_test[f"{outcome}_time_to_diagnosis"], y_pred)
+    logger.info(f"[{outcome}] C-index = {c_index[0]:.4f}")
 
-# # Clean + merge embeddings
-# df_train = clean_future(df_train, outcome)
-# df_train = merge_tabtext(df_train)
+    # Overall event rate + mean time among events
+    overall = pd.concat([df_train, df_test], ignore_index=True)
+    overall_rate = overall[f"{outcome}_future"].mean()
+    mean_event_time = overall.loc[overall[f"{outcome}_future"] == 1, f"{outcome}_time_to_diagnosis"].mean()
+    logger.info(f"[{outcome}] Overall event_rate={overall_rate:.4f} | mean_event_time={mean_event_time:.3f}")
+    
+    # logger.info(f"[{outcome}] Writing train and test datasets to data/data/cancer_train_with_sis_selected_features_{outcome}.csv")
+    # df_train.to_csv(f"data/cancer_train_with_sis_selected_features_{outcome}.csv", index=False)
+    # df_test.to_csv(f"data/cancer_test_with_sis_selected_features_{outcome}.csv", index=False)
+    
+    # Add risk columns
+    df_train = get_cancer_model_features(df_train, X_train, outcome, rsf)
+    df_test  = get_cancer_model_features(df_test,  X_test,  outcome, rsf)
+    
+    risk_cols = [c for c in df_train.columns if c.startswith(f"{outcome}_risk_") or c.startswith(f"{outcome}_delta_")]
+    df_train_base = df_train_base.merge(df_train[["eid"] + risk_cols], on="eid", how="left")
+    df_test_base  = df_test_base.merge(df_test[["eid"] + risk_cols],  on="eid", how="left")
 
-# df_test = clean_future(df_test, outcome)
-# df_test = merge_tabtext(df_test)
-
-# sis_cols = get_selected_features(df_train, outcome)
-# risk_cols = [
-#     col
-#     for outcome in outcomes
-#     for col in df_train.columns
-#     if col.startswith(f"{outcome}_risk_") or col.startswith(f"{outcome}_delta_")
-# ]
-# feature_cols = DEMO_FEATURES + sis_cols + risk_cols
-# X_train = df_train[feature_cols]
-# X_test = df_test[feature_cols]
-# X_train, X_test = encode_demo(X_train, X_test)
-
-# y_train = Surv.from_dataframe(f"{outcome}_future", f"{outcome}_time_to_diagnosis", df_train)
-# y_test  = Surv.from_dataframe(f"{outcome}_future", f"{outcome}_time_to_diagnosis", df_test)
-
-
-# # survial random forest 
-# logger.info("Training random forest...")
-# rsf = RandomSurvivalForest(
-#     n_estimators=100,
-#     min_samples_split=10,
-#     min_samples_leaf=100,
-#     max_depth = 10,
-#     max_features="sqrt",
-#     n_jobs=-1,
-#     random_state=42
-# )
-
-# t0 = time.time()
-# rsf.fit(X_train, y_train)
-# logger.info(f"[{outcome}] Fit RSF done in {(time.time()-t0)/60:.1f}min")
-
-# # dump(rsf, f"models/rsf_{outcome}_sis.joblib")  
-# # logger.info(f"[{outcome}] Saved model as models/rsf_{outcome}_sis.joblib")
-
-# t1 = time.time()
-# y_pred = rsf.predict(X_test)
-# logger.info(f"[{outcome}] Predicted in {(time.time()-t1):.1f}s")
-
-# c_index = concordance_index_censored(y_test[f"{outcome}_future"], y_test[f"{outcome}_time_to_diagnosis"], y_pred)
-# logger.info(f"[{outcome}] C-index = {c_index[0]:.4f}")
-
-
-# logger.info("Writing cancer train and test datasets to data/data/cancer_train_with_sis_selected_features.csv")
-# df_train.to_csv(f"data/cancer_train_with_sis_selected_features.csv", index=False)
-# df_test.to_csv(f"data/cancer_test_with_sis_selected_features.csv", index=False)
-
+    
+logger.info("=" * 80)
 outcome = "cancer"
+logger.info(f"Starting outcome: {outcome}")
 
-df_train = pd.read_csv("data/cancer_train_with_sis_selected_features.csv")
-df_test = pd.read_csv("data/cancer_test_with_sis_selected_features.csv")
+df_train = df_train_base.copy()
+df_test  = df_test_base.copy()
 
-logger.info("Training with only the risk features...")
+time_cols = [f"{c}_time_to_diagnosis" for c in outcomes]
+df_train[outcome] = df_train[time_cols].any(axis=1)
+df_test[outcome] = df_test[time_cols].any(axis=1)
+df_train[f"{outcome}_time_to_diagnosis"] = df_train[time_cols].min(axis=1)
+df_test[f"{outcome}_time_to_diagnosis"] = df_test[time_cols].min(axis=1)
+
+# Clean + merge embeddings
+df_train = clean_future(df_train, outcome)
+df_train = merge_tabtext(df_train)
+
+df_test = clean_future(df_test, outcome)
+df_test = merge_tabtext(df_test)
+
+sis_cols = get_selected_features(df_train, outcome)
 risk_cols = [
     col
     for outcome in outcomes
     for col in df_train.columns
     if col.startswith(f"{outcome}_risk_") or col.startswith(f"{outcome}_delta_")
 ]
-X_train = df_train[risk_cols]
-X_test = df_test[risk_cols]
+feature_cols = DEMO_FEATURES + sis_cols + risk_cols
+X_train = df_train[feature_cols]
+X_test = df_test[feature_cols]
+X_train, X_test = encode_demo(X_train, X_test)
 
 y_train = Surv.from_dataframe(f"{outcome}_future", f"{outcome}_time_to_diagnosis", df_train)
 y_test  = Surv.from_dataframe(f"{outcome}_future", f"{outcome}_time_to_diagnosis", df_test)
@@ -404,8 +380,8 @@ t0 = time.time()
 rsf.fit(X_train, y_train)
 logger.info(f"[{outcome}] Fit RSF done in {(time.time()-t0)/60:.1f}min")
 
-dump(rsf, f"models/rsf_{outcome}_sis.joblib")  
-logger.info(f"[{outcome}] Saved model as models/rsf_{outcome}_sis.joblib")
+# dump(rsf, f"models/rsf_{outcome}_sis.joblib")  
+# logger.info(f"[{outcome}] Saved model as models/rsf_{outcome}_sis.joblib")
 
 t1 = time.time()
 y_pred = rsf.predict(X_test)
@@ -415,9 +391,63 @@ c_index = concordance_index_censored(y_test[f"{outcome}_future"], y_test[f"{outc
 logger.info(f"[{outcome}] C-index = {c_index[0]:.4f}")
 
 
+# logger.info("Writing cancer train and test datasets to data/data/cancer_train_with_sis_selected_features.csv")
+# df_train.to_csv(f"data/cancer_train_with_sis_selected_features.csv", index=False)
+# df_test.to_csv(f"data/cancer_test_with_sis_selected_features.csv", index=False)
 
-# Overall event rate + mean time among events
-overall = pd.concat([df_train, df_test], ignore_index=True)
-overall_rate = overall[f"{outcome}_future"].mean()
-mean_event_time = overall.loc[overall[f"{outcome}_future"] == 1, f"{outcome}_time_to_diagnosis"].mean()
-logger.info(f"[{outcome}] Overall event_rate={overall_rate:.4f} | mean_event_time={mean_event_time:.3f}")
+
+
+
+
+# outcome = "cancer"
+
+# df_train = pd.read_csv("data/cancer_train_with_sis_selected_features.csv")
+# df_test = pd.read_csv("data/cancer_test_with_sis_selected_features.csv")
+
+# logger.info("Training with only the risk features...")
+# risk_cols = [
+#     col
+#     for outcome in outcomes
+#     for col in df_train.columns
+#     if col.startswith(f"{outcome}_risk_") or col.startswith(f"{outcome}_delta_")
+# ]
+# X_train = df_train[risk_cols]
+# X_test = df_test[risk_cols]
+
+# y_train = Surv.from_dataframe(f"{outcome}_future", f"{outcome}_time_to_diagnosis", df_train)
+# y_test  = Surv.from_dataframe(f"{outcome}_future", f"{outcome}_time_to_diagnosis", df_test)
+
+
+# # survial random forest 
+# logger.info("Training random forest...")
+# rsf = RandomSurvivalForest(
+#     n_estimators=100,
+#     min_samples_split=10,
+#     min_samples_leaf=100,
+#     max_depth = 10,
+#     max_features="sqrt",
+#     n_jobs=-1,
+#     random_state=42
+# )
+
+# t0 = time.time()
+# rsf.fit(X_train, y_train)
+# logger.info(f"[{outcome}] Fit RSF done in {(time.time()-t0)/60:.1f}min")
+
+# dump(rsf, f"models/rsf_{outcome}_sis.joblib")  
+# logger.info(f"[{outcome}] Saved model as models/rsf_{outcome}_sis.joblib")
+
+# t1 = time.time()
+# y_pred = rsf.predict(X_test)
+# logger.info(f"[{outcome}] Predicted in {(time.time()-t1):.1f}s")
+
+# c_index = concordance_index_censored(y_test[f"{outcome}_future"], y_test[f"{outcome}_time_to_diagnosis"], y_pred)
+# logger.info(f"[{outcome}] C-index = {c_index[0]:.4f}")
+
+
+
+# # Overall event rate + mean time among events
+# overall = pd.concat([df_train, df_test], ignore_index=True)
+# overall_rate = overall[f"{outcome}_future"].mean()
+# mean_event_time = overall.loc[overall[f"{outcome}_future"] == 1, f"{outcome}_time_to_diagnosis"].mean()
+# logger.info(f"[{outcome}] Overall event_rate={overall_rate:.4f} | mean_event_time={mean_event_time:.3f}")

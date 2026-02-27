@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=survival_analysis
-#SBATCH --output=logs/survival_analysis_diag_%j.out
-#SBATCH --error=logs/survival_analysis_diag_%j.err
+#SBATCH --job-name=rsf_disease
+#SBATCH --output=logs/rsf_disease_%j.out
+#SBATCH --error=logs/rsf_disease_%j.err
 #SBATCH --partition=mit_normal_gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=04:00:00
+#SBATCH --time=06:00:00
 
 # Usage: sbatch run_all.sh
 
@@ -21,4 +21,5 @@ echo "=========================================="
 module load miniforge  
 module load cuda/13.0.1  
 
+# python survival_analysis_diag.py
 python survival_analysis_diag.py

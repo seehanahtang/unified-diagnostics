@@ -202,12 +202,13 @@ def get_selected_features(df, outcome):
 # -----------------------
 # Load data
 # -----------------------
-logger.info("Loading train/test (combining train + valid into train)...")
-df_train_base = pd.read_csv(f"{data_path}/ukb_cancer_train_with_skin.csv")
-df_valid_base = pd.read_csv(f"{data_path}/ukb_cancer_valid_with_skin.csv")
-df_train_base = pd.concat([df_train_base, df_valid_base], axis=0)
-df_test_base  = pd.read_csv(f"{data_path}/ukb_cancer_test_with_skin.csv")
-
+# logger.info("Loading train/test (combining train + valid into train)...")
+# df_train_base = pd.read_csv(f"{data_path}/ukb_cancer_train_with_skin.csv")
+# df_valid_base = pd.read_csv(f"{data_path}/ukb_cancer_valid_with_skin.csv")
+# df_train_base = pd.concat([df_train_base, df_valid_base], axis=0)
+# df_test_base  = pd.read_csv(f"{data_path}/ukb_cancer_test_with_skin.csv")
+train_df = pd.read_csv(f'{config.data_path}ukb_cancer_train_new.csv')
+test_df = pd.read_csv(f'{config.data_path}ukb_cancer_test_new.csv')
     
 logger.info("=" * 80)
 logger.info(f"Starting outcome: {OUTCOME}")

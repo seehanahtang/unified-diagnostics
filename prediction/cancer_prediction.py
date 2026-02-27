@@ -22,7 +22,9 @@ from config import config, setup_directories, setup_logging
 from data_loader import (
     load_cancer_datasets, load_tabtext_embeddings, preprocess, 
     get_feature_columns, merge_tabtext_embeddings, get_X,
+    filter_cohort_by_time,
     filter_cohort_by_time_multiclass,
+    get_y,
     get_y_multiclass
 )
 from models import train_model
@@ -69,27 +71,23 @@ def run_cancer_prediction_pipeline(
     logger.info("=" * 60)
     
     # Load data
-    train_valid_df, test_df = load_cancer_datasets()
-    train_valid_df = get_y(train_valid_df, cancer_type, prediction_horizon)
-    test_df = get_y(test_df, cancer_type, prediction_horizon)
-
-    train_df, valid_df = train_test_split(train_valid_df, test_size=0.15, random_state=config.random_state, stratify=train_valid_df["outcome"])
+    train_valid_df, test_df = load_cancer_datasets(cancer_type, prediction_horizon)
     
     # Preprocess
     logger.info("Preprocessing data...")
-    train_df = preprocess(train_df, onehot=True)
-    valid_df = preprocess(valid_df, onehot=True)
+    train_valid_df = preprocess(train_valid_df, onehot=True)
     test_df = preprocess(test_df, onehot=True)
     
     # Merge tabtext embeddings
-    train_df = merge_tabtext_embeddings(train_df)
-    valid_df = merge_tabtext_embeddings(valid_df)
+    train_valid_df = merge_tabtext_embeddings(train_valid_df)
     test_df = merge_tabtext_embeddings(test_df)
     
     # Filter by time (exclude patients already diagnosed)
-    train_df = filter_cohort_by_time(train_df, cancer_type)
-    valid_df = filter_cohort_by_time(valid_df, cancer_type)
+    train_valid_df = filter_cohort_by_time(train_valid_df, cancer_type)
     test_df = filter_cohort_by_time(test_df, cancer_type)
+
+    y_train_valid = get_y(train_valid_df, cancer_type, prediction_horizon)
+    train_df, valid_df = train_test_split(train_valid_df, test_size=0.15, random_state=config.random_state, stratify=y_train_valid)
     
     # Get feature columns
     feature_cols = get_feature_columns(
@@ -98,7 +96,6 @@ def run_cancer_prediction_pipeline(
         use_blood=config.use_blood,
         use_demo=config.use_demo,
         use_tabtext=config.use_tabtext,
-        cancer_type=cancer_type
     )
     logger.info(f"Total features: {len(feature_cols)}")
     
@@ -108,13 +105,30 @@ def run_cancer_prediction_pipeline(
     X_valid = get_X(valid_df, feature_cols)
     X_test = get_X(test_df, feature_cols)
     
-    y_train = train_df["outcome"]
-    y_valid = valid_df["outcome"]
-    y_test = test_df["outcome"]
+    y_train = get_y(train_df, cancer_type, prediction_horizon)
+    y_valid = get_y(valid_df, cancer_type, prediction_horizon)
+    y_test = get_y(test_df, cancer_type, prediction_horizon)
 
     # Log class distribution for entire dataset (combined train + valid + test)
-    logger.info(f"Train: {y_train.sum()}, Valid: {y_valid.sum()}, Test: {y_test.sum()}")
-    
+    n_train_positives = int(y_train.sum())
+    logger.info(f"Train: {n_train_positives}, Valid: {y_valid.sum()}, Test: {y_test.sum()}")
+
+    if n_train_positives < 10:
+        logger.warning(f"Skipping {cancer_type}: fewer than 10 positives in training (n={n_train_positives})")
+        return {
+            'cancer_type': cancer_type,
+            'model_type': model_type,
+            'prediction_horizon': prediction_horizon,
+            'n_train': len(y_train),
+            'n_valid': len(y_valid),
+            'n_test': len(y_test),
+            'train_prevalence': y_train.mean(),
+            'n_train_positives': n_train_positives,
+            'n_features': len(feature_cols),
+            'status': 'skipped',
+            'skip_reason': f'fewer than 10 positives in training (n={n_train_positives})'
+        }
+
     # Train model
     model, best_params = train_model(
         X_train, y_train, X_valid, y_valid,
@@ -230,8 +244,6 @@ def run_multiclass_pipeline(
     
     # Load data
     train_valid_df, test_df = load_cancer_datasets()
-    train_valid_df, class_mapping = get_y_multiclass(train_valid_df, config.cancer_types, prediction_horizon)
-    test_df, class_mapping = get_y_multiclass(test_df, config.cancer_types, prediction_horizon)
     
     # Preprocess
     logger.info("Preprocessing data...")
@@ -256,6 +268,9 @@ def run_multiclass_pipeline(
         use_tabtext=config.use_tabtext,
     )   
     logger.info(f"Total features: {len(feature_cols)}")
+
+    train_valid_df, class_mapping = get_y_multiclass(train_valid_df, config.cancer_types, prediction_horizon)
+    test_df, class_mapping = get_y_multiclass(test_df, config.cancer_types, prediction_horizon)
 
     train_df, valid_df = train_test_split(train_valid_df, test_size=0.15, random_state=config.random_state, stratify=train_valid_df["outcome"])
     

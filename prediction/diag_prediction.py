@@ -13,20 +13,21 @@ import argparse
 import logging
 import random
 from typing import Dict, Any, List, Optional
+from sklearn.model_selection import train_test_split
 
 import pandas as pd
 import numpy as np
 
 from config import config, setup_directories, setup_logging
 from data_loader import (
-    load_datasets, load_tabtext_embeddings, preprocess, 
+    load_diag_datasets, load_tabtext_embeddings, preprocess, 
     get_feature_columns, merge_tabtext_embeddings, get_X,
-    filter_cohort_by_time, filter_by_sex, filter_high_missingness,
-    get_y, get_y_multiclass
+    filter_cohort_by_time,
+    get_y
 )
 from models import train_model
 from evaluator import (
-    evaluate_model, evaluate_model_multiclass, get_feature_importance, plot_results,
+    evaluate_model, get_feature_importance, plot_results,
     log_metrics, summarize_results,
     plot_calibration_curve
 )
@@ -70,16 +71,16 @@ def run_diag_prediction_pipeline(
     
     # Get feature columns
     feature_cols = get_feature_columns(
-        train_df,
+        train_valid_df,
         use_olink=config.use_olink,
         use_blood=config.use_blood,
         use_demo=config.use_demo,
         use_tabtext=config.use_tabtext,
-        diag_type=diag_type
     )
     logger.info(f"Total features: {len(feature_cols)}")
     
-    train_df, valid_df = train_test_split(train_valid_df, test_size=0.15, random_state=config.random_state, stratify=get_y(train_valid_df, diag_type, prediction_horizon))
+    y_train_valid = get_y(train_valid_df, diag_type, prediction_horizon)
+    train_df, valid_df = train_test_split(train_valid_df, test_size=0.15, random_state=config.random_state, stratify=y_train_valid)
     
     # Extract features and labels
     X_train = get_X(train_df, feature_cols)
@@ -94,35 +95,23 @@ def run_diag_prediction_pipeline(
     logger.info(f"Train: {y_train.sum()}, Valid: {y_valid.sum()}, Test: {y_test.sum()}")
     
     # Train model
-    model, best_params = train_model(
-        X_train, y_train, X_valid, y_valid,
-        model_type=model_type,
-        use_tuning=use_tuning,
-        n_trials=n_trials
-    )
+    model, best_params = train_model(X_train, y_train, X_valid, y_valid)
     
     # Evaluate on validation set
     y_valid_pred = model.predict_proba(X_valid)[:, 1]
-    valid_metrics = evaluate_model(
-        y_valid, y_valid_pred,
-        threshold_method=threshold_method,
-        target_recall=target_recall,
-        prefix='valid_'
-    )
+    valid_metrics = evaluate_model(y_valid, y_valid_pred)
     
     logger.info("\nValidation Set Results:")
-    log_metrics(valid_metrics, prefix='valid_')
+    log_metrics(valid_metrics)
     
     # Evaluate on test set
     y_test_pred = model.predict_proba(X_test)[:, 1]
     test_metrics = evaluate_model(
-        y_test, y_test_pred, 
-        threshold=valid_metrics['valid_threshold'],  # Use threshold from validation
-        prefix='test_'
+        y_test, y_test_pred
     )
     
     logger.info("\nTest Set Results:")
-    log_metrics(test_metrics, prefix='test_')
+    log_metrics(test_metrics)
     
     # Feature importance
     feature_importance = get_feature_importance(model, feature_cols)
@@ -133,30 +122,26 @@ def run_diag_prediction_pipeline(
     
     # Plot results
     if save_results:
-        plot_path = f"{config.output_dir}{diag_type}_{model_type}_results.png"
+        plot_path = f"{config.output_dir}{diag_type}_results.png"
         plot_results(
             y_test, y_test_pred, feature_importance, 
-            diag_type, model_type, save_path=plot_path
+            diag_type, save_path=plot_path
         )
         
         # Save model
-        model_filename = f"{config.models_dir}{model_type}_model_{prediction_horizon}yr_{diag_type}"
-        if model_type == 'xgboost':
-            model.save_model(f"{model_filename}.json")
-        else:
-            model.booster_.save_model(f"{model_filename}.txt")
+        model_filename = f"{config.models_dir}xgb_model_{prediction_horizon}yr_{diag_type}"
+        model.save_model(f"{model_filename}.json")
         logger.info(f"Saved model to {model_filename}")
 
         plot_calibration_curve(
             y_test, y_test_pred, n_bins=5,
-            save_path=f"{config.output_dir}{diag_type}_{model_type}_calibration.png"
+            save_path=f"{config.output_dir}{diag_type}_calibration.png"
         )
-        logger.info(f"Saved calibration curve to {config.output_dir}{diag_type}_{model_type}_calibration.png")
+        logger.info(f"Saved calibration curve to {config.output_dir}{diag_type}_calibration.png")
     
     # Compile results
     results = {
         'diag_type': diag_type,
-        'model_type': model_type,
         'prediction_horizon': prediction_horizon,
         'n_train': len(y_train),
         'n_valid': len(y_valid),
@@ -168,11 +153,68 @@ def run_diag_prediction_pipeline(
         **test_metrics,
         'status': 'completed'
     }
-    
-    if best_params:
-        results['best_params'] = str(best_params)
-    
+       
     return results
+
+def run_multi_diag_pipeline(
+    diag_types: Optional[List[str]] = None,
+    prediction_horizon: float = 1.0,
+    model_type: str = "xgboost",
+    use_tuning: bool = True,
+    n_trials: int = 50,
+    threshold_method: str = "target_recall",
+    target_recall: float = 0.8
+) -> pd.DataFrame:
+    """
+    Run prediction pipeline for multiple cancer types.
+    
+    Args:
+        cancer_types: List of cancer types to predict (None = all)
+        prediction_horizon: Time window in years
+        model_type: Model to use
+        use_tuning: Whether to use hyperparameter tuning
+        n_trials: Number of Optuna trials
+        threshold_method: Threshold selection method
+        target_recall: Target recall for 'target_recall' method
+        
+    Returns:
+        DataFrame with results for all cancer types
+    """
+    if diag_types is None:
+        diag_types = config.diag_types
+    
+    all_results = []
+
+    train_valid_df, test_df = load_diag_datasets()
+    
+    for diag_type in diag_types:
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Processing: {diag_type}")
+        logger.info(f"{'='*60}\n")
+        
+        try:
+            result = run_diag_prediction_pipeline(  
+                train_valid_df=train_valid_df,
+                test_df=test_df,
+                prediction_horizon=prediction_horizon,
+                diag_type=diag_type
+            )
+            all_results.append(result)
+        except Exception as e:
+            logger.error(f"Error processing {diag_type}: {e}")
+            all_results.append({
+                'diag_type': diag_type,
+                'status': 'error',
+                'error': str(e)
+            })
+    
+    # Summarize results
+    summary_df = summarize_results(
+        all_results, 
+        output_file=f"{config.output_dir}diag_prediction_summary.csv"
+    )
+    
+    return summary_df
 
 
 def main():
@@ -248,13 +290,10 @@ def main():
     logger.info(f"Arguments: {vars(args)}")
     logger.info(f"Diagnosis types: {config.diag_types}")
 
-    train_valid_df, test_df = load_diag_datasets()
     
-    result = run_diag_prediction_pipeline(  
-        train_valid_df=train_valid_df,
-        test_df=test_df,
+    results = run_multi_diag_pipeline(  
+        diag_types=config.diag_types,
         prediction_horizon=args.prediction_horizon,
-        diag_type=args.diag_type
     )
     logger.info(f"\nFinal Result: {result}")
     logger.info("\nPipeline completed!")

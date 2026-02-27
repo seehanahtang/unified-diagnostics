@@ -546,6 +546,7 @@ def main():
     
     # Run benchmark
     results_df = run_benchmark(train_df, test_df, model_types)
+    results_df.to_csv('results/model_benchmark_results.csv', index=False)
     
     print("\n" + "=" * 60)
     print("BENCHMARK COMPLETE")

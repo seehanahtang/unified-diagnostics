@@ -154,7 +154,7 @@ def run_ensemble_pipeline(
     logger.info("=" * 60)
     
     # Load data
-    train_df, valid_df, test_df = load_cancer_datasets()
+    train_valid_df, test_df = load_cancer_datasets()xw
     
     # Preprocess
     logger.info("Preprocessing data...")
@@ -184,7 +184,6 @@ def run_ensemble_pipeline(
         use_blood=config.use_blood,
         use_demo=config.use_demo,
         use_tabtext=config.use_tabtext,
-        cancer_type=None
     )
     logger.info(f"Base model features: {len(feature_cols)}")
     
@@ -222,11 +221,6 @@ def run_ensemble_pipeline(
     y_train = get_y(train_df, "cancer", prediction_horizon)
     y_valid = get_y(valid_df, "cancer", prediction_horizon)
     y_test = get_y(test_df, "cancer", prediction_horizon)
-
-    # Filter patients with >50% missing values
-    X_train, y_train = filter_high_missingness(X_train, y_train, threshold=0.5)
-    X_valid, y_valid = filter_high_missingness(X_valid, y_valid, threshold=0.5)
-    X_test, y_test = filter_high_missingness(X_test, y_test, threshold=0.5)
     
     # Train ensemble model
     logger.info("\nTraining ensemble model...")

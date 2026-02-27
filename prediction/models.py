@@ -48,7 +48,7 @@ def objective_xgb(
         'tree_method': 'hist',
         'device': 'cuda' if config.use_gpu else 'cpu',
         'enable_categorical': True,
-        'scale_pos_weight': scale_pos_weight,
+        # 'scale_pos_weight': scale_pos_weight,
         'random_state': config.random_state,
         'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
         'max_depth': trial.suggest_int('max_depth', 3, 10),

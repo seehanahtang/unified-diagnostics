@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=cancer_pred_2y
-#SBATCH --output=out/cancer_pred_2y_%j.out
-#SBATCH --error=out/cancer_pred_2y_%j.err
+#SBATCH --job-name=disease_pred
+#SBATCH --output=out/disease_pred_all_%j.out
+#SBATCH --error=out/disease_pred_all_%j.err
 #SBATCH --partition=mit_normal_gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
 
-# Cancer Prediction Pipeline - XGBoost and LightGBM
+# Diagnosis Prediction Pipeline - XGBoost and LightGBM
 # Usage: sbatch run_prediction.sbatch
 
 echo "=========================================="
@@ -28,12 +28,10 @@ module load cuda/13.0.1
 
 echo ""
 echo "=========================================="
-echo "Running XGBoost Model (2-year)"
+echo "Running Diagnosis Prediction Pipeline (1-year)"
 echo "=========================================="
-python cancer_prediction.py \
-    --model xgboost \
-    --prediction_horizon 2.0 \
-    --threshold-method f1 \
+python diag_prediction.py \
+    --prediction_horizon 1.0 \
     --gpu
 
 echo ""

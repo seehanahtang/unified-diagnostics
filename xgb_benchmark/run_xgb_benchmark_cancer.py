@@ -55,9 +55,6 @@ FEATURE_SETS = [
     'demo_protein_blood_top50'  # Demographics + Top 50 from protein+blood combined
 ]
 
-BASE_FEATURE_SETS = ['demo_protein', 'demo_blood']
-TOP50_FEATURE_SETS = ['demo_protein_top50', 'demo_protein_blood_top50']
-
 # Demographic columns
 DEMO_COLS = [
     'Age at recruitment',
@@ -97,8 +94,8 @@ def set_seeds(seed=RANDOM_STATE):
 def load_data(data_path=DATA_PATH):
     """Load train and test datasets."""
     print("Loading data...")
-    train_df = pd.read_csv(f"{data_path}ukb_disease_train.csv", low_memory=False)
-    test_df = pd.read_csv(f"{data_path}ukb_disease_test.csv", low_memory=False)
+    train_df = pd.read_csv(f"{data_path}ukb_cancer_train_new.csv", low_memory=False)
+    test_df = pd.read_csv(f"{data_path}ukb_cancer_test_new.csv", low_memory=False)
     print(f"  Train: {len(train_df)} rows, {len(train_df.columns)} columns")
     print(f"  Test: {len(test_df)} rows, {len(test_df.columns)} columns")
     return train_df, test_df
@@ -114,8 +111,23 @@ def get_feature_columns(df):
 
 def get_diagnosis_types(df):
     """Extract diagnosis types from column names."""
-    time_cols = [c for c in df.columns if c.endswith('_time_to_diagnosis')]
-    diag_types = [c.replace('_time_to_diagnosis', '') for c in time_cols]
+    diag_types = [
+        "oral_pharynx_cancer",
+        "digestive_organs_cancer",       
+        "respiratory_intrathoracic_cancer",     
+        "skin_cancer",
+        "mesothelial_soft_tissue_cancer",
+        "breast_cancer",
+        "female_genital_cancer",
+        "male_genital_cancer",
+        "urinary_tract_cancer",
+        "eye_brain_cns_cancer",
+        "endocrine_cancer",
+        "ill_defined_secondary_cancer",
+        "in_situ_cancer",
+        "hematologic_cancer",
+        "bone_cartilage_cancer"
+    ]
     return diag_types
 
 
@@ -157,9 +169,15 @@ def get_feature_set(feature_set_name, olink_cols, blood_cols, demo_cols,
     """
     Get feature columns for a given feature set configuration.
     
-    top_features dict structure:
-        'demo_protein': list of top protein features from demo_protein model
-        'demo_blood': list of top blood features from demo_blood model
+    Args:
+        feature_set_name: Name of feature set configuration
+        olink_cols: List of protein feature columns
+        blood_cols: List of blood biomarker columns
+        demo_cols: List of demographic columns
+        top_features: Dict with 'protein', 'blood', 'combined' top feature lists
+    
+    Returns:
+        List of feature column names
     """
     if feature_set_name == 'demo_protein':
         return demo_cols + olink_cols
@@ -171,42 +189,23 @@ def get_feature_set(feature_set_name, olink_cols, blood_cols, demo_cols,
         return demo_cols + olink_cols + blood_cols
     
     elif feature_set_name == 'demo_protein_top50':
-        # Top 50 protein features from demo_protein model + demo
-        if top_features and 'demo_protein' in top_features:
-            return demo_cols + top_features['demo_protein'][:50]
-        return demo_cols + olink_cols[:50]
+        if top_features and 'protein' in top_features:
+            return demo_cols + top_features['protein'][:50]
+        return demo_cols + olink_cols[:50]  # fallback
     
     elif feature_set_name == 'demo_blood_top50':
-        # Top 50 blood features from demo_blood model + demo
-        if top_features and 'demo_blood' in top_features:
-            return demo_cols + top_features['demo_blood'][:50]
-        return demo_cols + blood_cols[:50]
+        if top_features and 'blood' in top_features:
+            # Blood might have fewer than 50 features
+            return demo_cols + top_features['blood'][:50]
+        return demo_cols + blood_cols[:50]  # fallback
     
     elif feature_set_name == 'demo_protein_blood_top50':
-        # Top 50 protein + top 50 blood features (from respective models) + demo
-        top_protein = top_features.get('demo_protein', olink_cols)[:50] if top_features else olink_cols[:50]
-        top_blood = top_features.get('demo_blood', blood_cols)[:50] if top_features else blood_cols[:50]
-        return demo_cols + top_protein + top_blood
+        if top_features and 'combined' in top_features:
+            return demo_cols + top_features['combined'][:50]
+        return demo_cols + (olink_cols + blood_cols)[:50]  # fallback
     
     else:
         raise ValueError(f"Unknown feature set: {feature_set_name}")
-        
-def extract_top_features_from_model(model, feature_cols, target_cols, model_type, n_top=50):
-    """
-    Extract top N features from a trained model based on feature importance.
-    Only returns features that are in target_cols (e.g., olink_cols or blood_cols).
-    """
-    # Get feature importances 
-    importance = model.feature_importances_
-    
-    importance_df = pd.DataFrame({
-        'feature': feature_cols,
-        'importance': importance
-    }).sort_values('importance', ascending=False)
-    
-    # Filter to only target feature type (e.g., protein or blood)
-    filtered = importance_df[importance_df['feature'].isin(target_cols)]
-    return filtered.head(n_top)['feature'].tolist()
 
 
 def select_top_features(model, feature_cols, olink_cols, blood_cols, n_top=50):
@@ -371,6 +370,28 @@ def run_benchmark(train_df, test_df, output_dir='.'):
             print(f"    Test: {len(y_test)} (pos={n_pos_test}, "
                   f"{n_pos_test/len(y_test)*100:.2f}%)")
             
+            # First, train on full feature set to get top features
+            cache_key = (diag_type, time_point)
+            if cache_key not in top_features_cache:
+                # Train with all features to determine top features
+                all_features = demo_cols + olink_cols + blood_cols
+                X_train_all = train_filtered[all_features].copy()
+                X_test_all = test_filtered[all_features].copy()
+                
+                _, full_model = train_and_evaluate(
+                    X_train_all, X_test_all, y_train, y_test
+                )
+
+                # full_model.save_model(f"{models_dir}xgb_model_{diag_type}_{time_point}_all.json")
+                # print(f"Saved model to {models_dir}xgb_model_{diag_type}_{time_point}_all.json")
+                
+                # Extract top features
+                top_features_cache[cache_key] = select_top_features(
+                    full_model, all_features, olink_cols, blood_cols, n_top=50
+                )
+            
+            top_features = top_features_cache[cache_key]
+            
             # Now evaluate each feature set
             for feature_set in FEATURE_SETS:
                 combo_count += 1
@@ -388,20 +409,8 @@ def run_benchmark(train_df, test_df, output_dir='.'):
                     # Train and evaluate
                     auc, model = train_and_evaluate(X_train, X_test, y_train, y_test)
 
-                    # model.save_model(f"{models_dir}xgb_model_{diag_type}_{time_point}_{feature_set}.json")
-                    # print(f"Saved model to {models_dir}xgb_model_{diag_type}_{time_point}_{feature_set}.json")
-                    
-                    # Cache base models and extract top features for top50 variants
-                    if feature_set in BASE_FEATURE_SETS:
-                        base_models[feature_set] = model
-                        if feature_set == 'demo_protein':
-                            top_features['demo_protein'] = extract_top_features_from_model(
-                                model, feature_cols, olink_cols, model_type, n_top=50
-                            )
-                        elif feature_set == 'demo_blood':
-                            top_features['demo_blood'] = extract_top_features_from_model(
-                                model, feature_cols, blood_cols, model_type, n_top=50
-                            )
+                    model.save_model(f"{models_dir}xgb_model_{diag_type}_{time_point}_{feature_set}.json")
+                    print(f"Saved model to {models_dir}xgb_model_{diag_type}_{time_point}_{feature_set}.json")
                     
                     print(f"    {feature_set}: AUC = {auc:.4f} "
                           f"({len(feature_cols)} features)")
@@ -445,7 +454,7 @@ def save_results(results_df, output_dir='.'):
     """
     
     # Save results to a CSV file
-    results_df.to_csv(f'{output_dir}xgb_benchmark_results.csv', index=False)
+    results_df.to_csv(f'{output_dir}xgb_benchmark_cancer_results.csv', index=False)
    
     return results_df
 
@@ -515,10 +524,10 @@ def main():
     if top_features_list:
         top_features_df = pd.DataFrame(top_features_list)
         top_features_df.to_csv(
-            f'{args.output_dir}top_features_per_condition.csv', 
+            f'{args.output_dir}top_features_per_cancer.csv', 
             index=False
         )
-        print(f"\nSaved top features to: {args.output_dir}top_features_per_condition.csv")
+        print(f"\nSaved top features to: {args.output_dir}top_features_per_cancer.csv")
     
     print("\n" + "=" * 60)
     print("BENCHMARK COMPLETE")

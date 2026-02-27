@@ -35,7 +35,7 @@ def load_tabtext_embeddings():
         config.use_tabtext = False
 
 
-def load_cancer_datasets() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_cancer_datasets(cancer_type = None, prediction_horizon = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load train, validation, and test datasets.
     
@@ -51,11 +51,17 @@ def load_cancer_datasets() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     logger.info("Loading cancer datasets...")
     
-    # Load original train and test sets
-    train_df = pd.read_csv(f'{config.data_dir}ukb_cancer_train_new.csv')
-    test_df = pd.read_csv(f'{config.data_dir}ukb_cancer_test_new.csv')
-    
-    logger.info(f"Original Train: {len(train_df)}, Test: {len(test_df)}")
+    if cancer_type is None:
+        # Load original train and test sets
+        train_df = pd.read_csv(f'{config.data_dir}ukb_cancer_train_new.csv')
+        test_df = pd.read_csv(f'{config.data_dir}ukb_cancer_test_new.csv')
+
+        logger.info(f"Original Train: {len(train_df)}, Test: {len(test_df)}")
+    else:
+        df = pd.read_csv(f"{config.data_dir}blood_protein_cancers_clean_new.csv")
+        y = get_y(df, cancer_type, prediction_horizon)
+        train_df, test_df = train_test_split(df, test_size=0.2, random_state=config.random_state, stratify=y)
+        logger.info(f"Split into Train: {len(train_df)}, Test: {len(test_df)}")             
     return train_df, test_df
 
 
@@ -76,8 +82,8 @@ def load_diag_datasets() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     logger.info("Loading diag datasets...")
     
     # Load original train and test sets
-    train_df = pd.read_csv(f'{config.data_dir}ukb_diag_train.csv')
-    test_df = pd.read_csv(f'{config.data_dir}ukb_diag_test.csv')
+    train_df = pd.read_csv(f'{config.data_dir}ukb_disease_train.csv')
+    test_df = pd.read_csv(f'{config.data_dir}ukb_disease_test.csv')
     
     logger.info(f"Original Train: {len(train_df)}, Test: {len(test_df)}")
     
