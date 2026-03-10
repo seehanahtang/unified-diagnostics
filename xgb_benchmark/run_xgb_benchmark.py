@@ -50,13 +50,18 @@ FEATURE_SETS = [
     'demo_protein',           # Demographics + Protein features
     'demo_blood',             # Demographics + Blood features  
     'demo_protein_blood',     # Demographics + Protein + Blood (all features)
-    'demo_protein_top50',     # Demographics + Top 50 protein features
-    'demo_blood_top50',       # Demographics + Top 50 blood features (or all if <50)
+    # 'demo_protein_top50',     # Demographics + Top 50 protein features
+    # 'demo_blood_top50',       # Demographics + Top 50 blood features (or all if <50)
     'demo_protein_blood_top50'  # Demographics + Top 50 from protein+blood combined
 ]
 
 BASE_FEATURE_SETS = ['demo_protein', 'demo_blood']
-TOP50_FEATURE_SETS = ['demo_protein_top50', 'demo_protein_blood_top50']
+# TOP50_FEATURE_SETS = ['demo_protein_top50', 'demo_protein_blood_top50']
+TOP50_FEATURE_SETS = ['demo_protein_blood_top50']
+
+FEATURE_SETS = [
+    'demo_protein_blood',     # Demographics + Protein + Blood (all features)
+]
 
 # Demographic columns
 DEMO_COLS = [
@@ -66,7 +71,16 @@ DEMO_COLS = [
     'Systolic blood pressure, automated reading',
     'Diastolic blood pressure, automated reading',
     'Townsend deprivation index at recruitment',
+    'Smoking status', 
+    'Alcohol intake frequency.'
 ]
+
+# Demographic columns that should be treated as categorical
+CATEGORICAL_DEMO_COLS = [
+    'Smoking status',
+    'Alcohol intake frequency.'
+]
+
 
 # XGBoost parameters (from notebook)
 XGB_PARAMS = {
@@ -95,13 +109,17 @@ def set_seeds(seed=RANDOM_STATE):
 
 
 def load_data(data_path=DATA_PATH):
-    """Load train and test datasets."""
+    """Load train, test, and external validation datasets."""
     print("Loading data...")
     train_df = pd.read_csv(f"{data_path}ukb_disease_train.csv", low_memory=False)
+    valid_df = pd.read_csv(f"{data_path}ukb_disease_valid.csv", low_memory=False)
     test_df = pd.read_csv(f"{data_path}ukb_disease_test.csv", low_memory=False)
+    external_df = pd.read_csv(f"{data_path}ukb_disease_scotland_wales.csv", low_memory=False)
     print(f"  Train: {len(train_df)} rows, {len(train_df.columns)} columns")
+    print(f"  Valid: {len(valid_df)} rows, {len(valid_df.columns)} columns")
     print(f"  Test: {len(test_df)} rows, {len(test_df.columns)} columns")
-    return train_df, test_df
+    print(f"  External (Scotland/Wales): {len(external_df)} rows, {len(external_df.columns)} columns")
+    return train_df, valid_df, test_df, external_df
 
 
 def get_feature_columns(df):
@@ -185,13 +203,12 @@ def get_feature_set(feature_set_name, olink_cols, blood_cols, demo_cols,
     elif feature_set_name == 'demo_protein_blood_top50':
         # Top 50 protein + top 50 blood features (from respective models) + demo
         top_protein = top_features.get('demo_protein', olink_cols)[:50] if top_features else olink_cols[:50]
-        top_blood = top_features.get('demo_blood', blood_cols)[:50] if top_features else blood_cols[:50]
         return demo_cols + top_protein + top_blood
     
     else:
         raise ValueError(f"Unknown feature set: {feature_set_name}")
         
-def extract_top_features_from_model(model, feature_cols, target_cols, model_type, n_top=50):
+def extract_top_features_from_model(model, feature_cols, target_cols, n_top=50):
     """
     Extract top N features from a trained model based on feature importance.
     Only returns features that are in target_cols (e.g., olink_cols or blood_cols).
@@ -248,41 +265,45 @@ def select_top_features(model, feature_cols, olink_cols, blood_cols, n_top=50):
     }
 
 
-def train_and_evaluate(X_train, X_test, y_train, y_test):
+def train_and_evaluate(X_train, X_test, y_train, y_test,
+                       X_external=None, y_external=None):
     """
-    Train XGBoost model and return test AUC.
+    Train XGBoost model and return test AUC and optional external validation AUC.
+    
+    Assumes any desired imputation has already been applied to X inputs.
     
     Returns:
         auc: Test AUC score
+        external_auc: External validation AUC score (np.nan if not provided)
         model: Trained XGBoost model
     """
-    # Impute missing values
-    imputer = SimpleImputer(strategy='median')
-    X_train_imp = imputer.fit_transform(X_train)
-    X_test_imp = imputer.transform(X_test)
-    
-    # Train model
     model = xgb.XGBClassifier(**XGB_PARAMS)
-    model.fit(X_train_imp, y_train)
+    model.fit(X_train, y_train)
     
-    # Evaluate
-    y_pred = model.predict_proba(X_test_imp)[:, 1]
+    y_pred = model.predict_proba(X_test)[:, 1]
     auc = roc_auc_score(y_test, y_pred)
     
-    return auc, model
+    external_auc = np.nan
+    if X_external is not None and y_external is not None and len(y_external) > 0:
+        y_ext_pred = model.predict_proba(X_external)[:, 1]
+        if y_external.sum() >= 1 and y_external.sum() < len(y_external):
+            external_auc = roc_auc_score(y_external, y_ext_pred)
+    
+    return auc, external_auc, model
 
 
 # =============================================================================
 # Main Benchmark Function
 # =============================================================================
 
-def run_benchmark(train_df, test_df, output_dir='.'):
+def run_benchmark(train_df, valid_df, test_df, external_df, output_dir='.', data_path=DATA_PATH):
     """
     Run complete benchmark across all diagnosis types, time points, and feature sets.
     
     Returns:
-        DataFrame with columns: diag_type, time_point, feature_set, auc, n_train, 
-                               n_test, n_pos_train, n_pos_test, status
+        DataFrame with columns: diag_type, time_point, feature_set, auc, external_auc,
+                               n_train, n_test, n_external, n_pos_train, n_pos_test,
+                               n_pos_external, status
     """
     set_seeds(RANDOM_STATE)
     
@@ -311,26 +332,41 @@ def run_benchmark(train_df, test_df, output_dir='.'):
         print(f"Diagnosis: {diag_type}")
         print(f"{'='*60}")
         
+        # For each diagnosis, collect risk predictions for each dataset and time point
+        # Structure: risk_store[split][eid] -> {time_point: risk}
+        risk_store = {
+            'train': {},
+            'valid': {},
+            'test': {},
+            'external': {},
+        }
+        
         for time_point in TIME_POINTS:
             print(f"\n  Time point: {time_point}yr")
             print(f"  {'-'*50}")
             
             # Get appropriate labels based on time point
             if time_point == 0:
-                # Current diagnosis - use all data
                 train_filtered = train_df.copy()
                 test_filtered = test_df.copy()
+                valid_filtered = valid_df.copy()
+                external_filtered = external_df.copy()
                 y_train = get_labels_current(train_filtered, diag_type)
                 y_test = get_labels_current(test_filtered, diag_type)
+                y_valid = get_labels_current(valid_filtered, diag_type)
+                y_external = get_labels_current(external_filtered, diag_type)
             else:
-                # Future diagnosis - filter out already diagnosed
                 train_filtered = filter_for_future_prediction(train_df, diag_type)
                 test_filtered = filter_for_future_prediction(test_df, diag_type)
+                valid_filtered = filter_for_future_prediction(valid_df, diag_type)
+                external_filtered = filter_for_future_prediction(external_df, diag_type)
                 y_train = get_labels_future(train_filtered, diag_type, time_point)
                 y_test = get_labels_future(test_filtered, diag_type, time_point)
+                y_valid = get_labels_future(valid_filtered, diag_type, time_point)
+                y_external = get_labels_future(external_filtered, diag_type, time_point)
             
             # Skip if insufficient samples
-            if y_train is None or y_test is None:
+            if y_train is None or y_test is None or y_valid is None:
                 print(f"    Skipping: No time-to-diagnosis column")
                 for fs in FEATURE_SETS:
                     results.append({
@@ -338,16 +374,20 @@ def run_benchmark(train_df, test_df, output_dir='.'):
                         'time_point': time_point,
                         'feature_set': fs,
                         'auc': np.nan,
+                        'external_auc': np.nan,
                         'n_train': 0,
                         'n_test': 0,
+                        'n_external': 0,
                         'n_pos_train': 0,
                         'n_pos_test': 0,
+                        'n_pos_external': 0,
                         'status': 'no_column'
                     })
                 continue
             
             n_pos_train = int(y_train.sum())
             n_pos_test = int(y_test.sum())
+            n_pos_external = int(y_external.sum()) if y_external is not None else 0
             
             if n_pos_train < 3 or n_pos_test < 3:
                 print(f"    Skipping: Insufficient positives "
@@ -358,10 +398,13 @@ def run_benchmark(train_df, test_df, output_dir='.'):
                         'time_point': time_point,
                         'feature_set': fs,
                         'auc': np.nan,
+                        'external_auc': np.nan,
                         'n_train': len(y_train),
                         'n_test': len(y_test),
+                        'n_external': len(y_external) if y_external is not None else 0,
                         'n_pos_train': n_pos_train,
                         'n_pos_test': n_pos_test,
+                        'n_pos_external': n_pos_external,
                         'status': 'insufficient_positives'
                     })
                 continue
@@ -370,40 +413,102 @@ def run_benchmark(train_df, test_df, output_dir='.'):
                   f"{n_pos_train/len(y_train)*100:.2f}%)")
             print(f"    Test: {len(y_test)} (pos={n_pos_test}, "
                   f"{n_pos_test/len(y_test)*100:.2f}%)")
+            if y_external is not None and len(y_external) > 0:
+                print(f"    External: {len(y_external)} (pos={n_pos_external}, "
+                      f"{n_pos_external/len(y_external)*100:.2f}%)")
+            
+            top_features = {}
             
             # Now evaluate each feature set
             for feature_set in FEATURE_SETS:
                 combo_count += 1
                 
                 try:
-                    # Get feature columns for this configuration
                     feature_cols = get_feature_set(
                         feature_set, olink_cols, blood_cols, demo_cols, top_features
                     )
                     
-                    # Prepare data
                     X_train = train_filtered[feature_cols].copy()
+                    X_valid = valid_filtered[feature_cols].copy()
                     X_test = test_filtered[feature_cols].copy()
                     
-                    # Train and evaluate
-                    auc, model = train_and_evaluate(X_train, X_test, y_train, y_test)
+                    X_external = None
+                    if y_external is not None and len(external_filtered) > 0:
+                        X_external = external_filtered[feature_cols].copy()
 
-                    # model.save_model(f"{models_dir}xgb_model_{diag_type}_{time_point}_{feature_set}.json")
-                    # print(f"Saved model to {models_dir}xgb_model_{diag_type}_{time_point}_{feature_set}.json")
+                    # Ensure selected demographic categorical columns use pandas category dtype
+                    for c in CATEGORICAL_DEMO_COLS:
+                        X_train[c] = X_train[c].astype('category')
+                        X_valid[c] = X_valid[c].astype('category')
+                        X_test[c] = X_test[c].astype('category')
+                        if X_external is not None:
+                            X_external[c] = X_external[c].astype('category')
+
+                    # Only impute numeric biomarker columns (olink_*, blood_*)
+                    numeric_cols = [
+                        c for c in feature_cols
+                        if (c in olink_cols) or (c in blood_cols)
+                    ]
+                    if numeric_cols:
+                        imputer = SimpleImputer(strategy='median')
+                        X_train[numeric_cols] = imputer.fit_transform(
+                            X_train[numeric_cols]
+                        )
+                        X_valid[numeric_cols] = imputer.transform(
+                            X_valid[numeric_cols]
+                        )
+                        X_test[numeric_cols] = imputer.transform(
+                            X_test[numeric_cols]
+                        )
+                        if X_external is not None:
+                            X_external[numeric_cols] = imputer.transform(
+                                X_external[numeric_cols]
+                            )
+
+                    auc, external_auc, model = train_and_evaluate(
+                        X_train, X_test, y_train, y_test,
+                        X_external=X_external, y_external=y_external
+                    )
+
+                    model.save_model(f"{models_dir}xgb_model_{diag_type}_{time_point}_{feature_set}.json")
+                    print(f"Saved model to {models_dir}xgb_model_{diag_type}_{time_point}_{feature_set}.json")
+
+                    # Collect risk predictions for the main feature set
+                    # (currently 'demo_protein_blood' is the only feature set used)
+                    if feature_set == 'demo_protein_blood':
+                        # Train risks
+                        train_proba = model.predict_proba(X_train)[:, 1]
+                        for eid, p in zip(train_filtered['eid'], train_proba):
+                            risk_store['train'].setdefault(eid, {})[time_point] = float(p)
+
+                        # Validation risks
+                        valid_proba = model.predict_proba(X_valid)[:, 1]
+                        for eid, p in zip(valid_filtered['eid'], valid_proba):
+                            risk_store['valid'].setdefault(eid, {})[time_point] = float(p)
+
+                        # Test risks
+                        test_proba = model.predict_proba(X_test)[:, 1]
+                        for eid, p in zip(test_filtered['eid'], test_proba):
+                            risk_store['test'].setdefault(eid, {})[time_point] = float(p)
+
+                        # External risks (if available)
+                        if X_external is not None and y_external is not None and len(y_external) > 0:
+                            ext_proba = model.predict_proba(X_external)[:, 1]
+                            for eid, p in zip(external_filtered['eid'], ext_proba):
+                                risk_store['external'].setdefault(eid, {})[time_point] = float(p)
                     
-                    # Cache base models and extract top features for top50 variants
                     if feature_set in BASE_FEATURE_SETS:
-                        base_models[feature_set] = model
                         if feature_set == 'demo_protein':
                             top_features['demo_protein'] = extract_top_features_from_model(
-                                model, feature_cols, olink_cols, model_type, n_top=50
+                                model, feature_cols, olink_cols, n_top=50
                             )
                         elif feature_set == 'demo_blood':
                             top_features['demo_blood'] = extract_top_features_from_model(
-                                model, feature_cols, blood_cols, model_type, n_top=50
+                                model, feature_cols, blood_cols, n_top=50
                             )
                     
-                    print(f"    {feature_set}: AUC = {auc:.4f} "
+                    ext_str = f", External AUC = {external_auc:.4f}" if not np.isnan(external_auc) else ""
+                    print(f"    {feature_set}: AUC = {auc:.4f}{ext_str} "
                           f"({len(feature_cols)} features)")
                     
                     results.append({
@@ -411,10 +516,13 @@ def run_benchmark(train_df, test_df, output_dir='.'):
                         'time_point': time_point,
                         'feature_set': feature_set,
                         'auc': auc,
+                        'external_auc': external_auc,
                         'n_train': len(y_train),
                         'n_test': len(y_test),
+                        'n_external': len(y_external) if y_external is not None else 0,
                         'n_pos_train': n_pos_train,
                         'n_pos_test': n_pos_test,
+                        'n_pos_external': n_pos_external,
                         'n_features': len(feature_cols),
                         'status': 'completed'
                     })
@@ -426,12 +534,37 @@ def run_benchmark(train_df, test_df, output_dir='.'):
                         'time_point': time_point,
                         'feature_set': feature_set,
                         'auc': np.nan,
+                        'external_auc': np.nan,
                         'n_train': len(y_train),
                         'n_test': len(y_test),
+                        'n_external': len(y_external) if y_external is not None else 0,
                         'n_pos_train': n_pos_train,
                         'n_pos_test': n_pos_test,
+                        'n_pos_external': n_pos_external,
                         'status': f'error: {str(e)}'
                     })
+    
+        # After all time points and feature sets for this diagnosis, write risk files
+        risk_base_dir = os.path.join(data_path, "disease_risk", "xgb_risk")
+        os.makedirs(risk_base_dir, exist_ok=True)
+
+        time_col_map = {t: f"risk_{t}years" for t in TIME_POINTS}
+
+        for split_name, store in risk_store.items():
+            if not store:
+                continue
+
+            rows = []
+            for eid, risks in store.items():
+                row = {"eid": eid}
+                for t, col in time_col_map.items():
+                    row[col] = risks.get(t, np.nan)
+                rows.append(row)
+
+            risk_df = pd.DataFrame(rows)
+            risk_fname = f"{diag_type}_xgb_risk_{split_name}.csv"
+            risk_path = os.path.join(risk_base_dir, risk_fname)
+            risk_df.to_csv(risk_path, index=False)
     
     # Convert to DataFrame
     results_df = pd.DataFrame(results)
@@ -489,11 +622,13 @@ def main():
         print(f"  {k}: {v}")
     
     # Load data
-    train_df, test_df = load_data(args.data_path)
+    train_df, valid_df, test_df, external_df = load_data(args.data_path)
     
     # Run benchmark
     results_df, top_features = run_benchmark(
-        train_df, test_df, output_dir=args.output_dir
+        train_df, valid_df, test_df, external_df,
+        output_dir=args.output_dir,
+        data_path=args.data_path,
     )
     
     # Create results file

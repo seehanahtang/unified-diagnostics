@@ -16,7 +16,7 @@ from sksurv.metrics import concordance_index_censored
 # -----------------------
 # Logging setup
 # -----------------------
-def setup_logger(log_dir: str, name: str = "ukb_rsf_diag") -> logging.Logger:
+def setup_logger(log_dir: str, name: str = "ukb_rsf_cancer_base") -> logging.Logger:
     os.makedirs(log_dir, exist_ok=True)
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
@@ -49,56 +49,57 @@ def setup_logger(log_dir: str, name: str = "ukb_rsf_diag") -> logging.Logger:
 # -----------------------
 # Config
 # -----------------------
-data_path = "/orcd/pool/003/dbertsim_shared/ukb/"
-output_dir = "results/"
+data_path = "/orcd/pool/003/dbertsim_shared/ukb"
 logger = setup_logger("logs")
 
-DEMO_COLS = [
-    'Age at recruitment',
+DEMO_FEATURES = [
+    'Age at recruitment', 
     'Sex_male',
-    'Body mass index (BMI)',
+    # 'Ethnic background',
+    'Body mass index (BMI)', 
     'Systolic blood pressure, automated reading',
     'Diastolic blood pressure, automated reading',
     'Townsend deprivation index at recruitment',
     'Smoking status', 
-    'Alcohol intake frequency.'
+    'Alcohol intake frequency.',
+    # 'Medication for cholesterol, blood pressure or diabetes'
 ]
-
-CATEGORICAL_DEMO = ["Smoking status", "Alcohol intake frequency."]
-
-# Feature set configurations
-FEATURE_SETS = [
-    'demo_protein',           # Demographics + Protein features
-    'demo_blood',             # Demographics + Blood features  
-    'demo_protein_blood',     # Demographics + Protein + Blood (all features)
-]
+CATEGORICAL_DEMO = ["Ethnic background", "Smoking status", "Alcohol intake frequency."]
 
 # -----------------------
 # Helpers
 # -----------------------
-def get_diagnosis_types(df):
-    """Extract diagnosis types from column names."""
-    time_cols = [c for c in df.columns if c.endswith('_time_to_diagnosis')]
-    diag_types = [c.replace('_time_to_diagnosis', '') for c in time_cols]
-    return diag_types
+def get_cancer_types(df):
+    """Extract cancer types from column names."""
+    cancers = [c for c in df.columns if c.endswith('cancer')]
+    return cancers
 
 def encode_demo(X_train, X_test):
     X_train = pd.get_dummies(X_train, columns=CATEGORICAL_DEMO, dummy_na=True)
-    X_test  = pd.get_dummies(X_test,  columns=CATEGORICAL_DEMO, dummy_na=True)
-
-    X_train = X_train.reindex(sorted(X_train.columns), axis=1)
-    X_test  = X_test.reindex(columns=X_train.columns, fill_value=0)
+    X_test = pd.get_dummies(X_test, columns=CATEGORICAL_DEMO, dummy_na=True)
+    
+    X_test = X_test.reindex(columns=X_train.columns, fill_value=0)
 
     return X_train, X_test
 
+def merge_tabtext(df):
+    demo = pd.read_csv(f"{data_path}/demo_embeddings.csv")
+    cn_columns = [c for c in demo.columns if (c.startswith('cn_'))]
+    df = pd.merge(df, demo[['eid']+ cn_columns], how = 'left', on = 'eid')
+    return df
+
 def clean_future(df, outcome): 
     # Restrict to future
-    df = df.loc[df[outcome] == 0].copy()
+    df = df.loc[df[f"{outcome}"] == 0].copy()
     df.loc[:, f"{outcome}_future"] = 0
     df.loc[df[f"{outcome}_time_to_diagnosis"] > 0, f"{outcome}_future"] = 1
     
     mask = df[f"{outcome}_future"] == 0
-    df.loc[mask, f'{outcome}_time_to_diagnosis'] = 15.0
+    df.loc[mask, f'{outcome}_time_to_diagnosis'] = df.loc[mask, 'time_to_follow_up']
+    
+    imputer = SimpleImputer(strategy="median")
+    df[protein_cols] = imputer.fit_transform(df[protein_cols])
+    logger.info(f"[{outcome}] Imputed Olink median on {len(protein_cols)} proteins")
     
     return df 
 
@@ -134,10 +135,41 @@ def sis(X, y, k=None, frac=None):
     scores = np.abs(cov / (X_std * y_std + 1e-12))
 
     # sort features
+    ranked_idx = np.argsort(-scores)[:k]
     score_dict = {colnames[i]: scores[i] for i in range(len(colnames))}
 
-
     return score_dict
+
+def get_numeric_feature_columns(
+    df: pd.DataFrame,
+    use_olink: bool = True,
+    use_blood: bool = True,
+    use_demo: bool = True,
+    use_tabtext: bool = False,
+    cancer_type: Optional[str] = None
+) -> List[str]:
+    features = []
+    
+    if use_tabtext:
+        embedding_cols = [col for col in df.columns if col.startswith("cn_")]
+        features.extend(embedding_cols)
+    
+    if use_olink:
+        olink_cols = [col for col in df.columns if col.startswith("olink_")]
+        features.extend(olink_cols)
+    
+    if use_blood:
+        blood_cols = [col for col in df.columns if col.startswith("blood_")]
+        features.extend(blood_cols)
+    
+    return features
+
+def get_feature_columns(df):
+    """Extract feature column lists from dataframe."""
+    olink_cols = [c for c in df.columns if c.startswith('olink_')]
+    blood_cols = [c for c in df.columns if c.startswith('blood_')]
+    demo_cols = [c for c in DEMO_COLS if c in df.columns]
+    return olink_cols, blood_cols, demo_cols
 
 def get_feature_set(df, outcome, feature_set_name, olink_cols, blood_cols, demo_cols):
     if feature_set_name == 'demo_blood':
@@ -152,66 +184,17 @@ def get_feature_set(df, outcome, feature_set_name, olink_cols, blood_cols, demo_
     
     else:
         raise ValueError(f"Unknown feature set: {feature_set_name}")
-
-def get_feature_columns(df):
-    """Extract feature column lists from dataframe."""
-    olink_cols = [c for c in df.columns if c.startswith('olink_')]
-    blood_cols = [c for c in df.columns if c.startswith('blood_')]
-    demo_cols = [c for c in DEMO_COLS if c in df.columns]
-    return olink_cols, blood_cols, demo_cols
-
-def get_selected_features(df, outcome, features):
-    X = df[features]
-    y = df[f"{outcome}_future"]
     
-    scores = sis(X, y)
-    scores_sorted = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-    sis_cols = [item[0] for item in scores_sorted[:500]]
-    logger.info(f"Selected 50 columns with largest sis scores")
-    
-    return sis_cols
-
-def train_and_evaluate(X_train, X_test, y_train, y_test):
-    imputer = SimpleImputer(strategy="median")
-    X_train = imputer.fit_transform(X_train)
-    X_test = imputer.transform(X_test)
-    logger.info(f"[{outcome}] Imputed median on all features.")
-
-    # survial random forest 
-    logger.info("Training random forest...")
-    rsf = RandomSurvivalForest(
-        n_estimators=100,
-        min_samples_split=10,
-        min_samples_leaf=100,
-        max_depth = 10,
-        max_features="sqrt",
-        n_jobs=-1,
-        random_state=42
-    )
-    
-    t0 = time.time()
-    rsf.fit(X_train, y_train)
-    logger.info(f"[{outcome}] Fit RSF done in {(time.time()-t0)/60:.1f}min")
-    
-    t1 = time.time()
-    y_pred = rsf.predict(X_test)
-    logger.info(f"[{outcome}] Predicted in {(time.time()-t1):.1f}s")
-    
-    c_index = concordance_index_censored(y_test[f"{outcome}_future"], y_test[f"{outcome}_time_to_diagnosis"], y_pred)
-    logger.info(f"[{outcome}] C-index = {c_index[0]:.4f}")
-
-    return rsf,c_index[0]
-
 # -----------------------
 # Load data
 # -----------------------
 logger.info("Loading train/test...")
-df_train_base = pd.read_csv(f"{data_path}ukb_disease_train.csv", low_memory=False)
-df_test_base  = pd.read_csv(f"{data_path}ukb_disease_test.csv", low_memory=False)
+df_train_base = pd.read_csv(f"{data_path}ukb_cancer_train.csv", low_memory=False)
+df_test_base  = pd.read_csv(f"{data_path}ukb_cancer_test.csv", low_memory=False)
 
-outcomes = get_diagnosis_types(df_train_base)
+outcomes = get_cancer_types(df_train_base)
 olink_cols, blood_cols, demo_cols = get_feature_columns(df_train_base)
-
+    
 results = []
 for outcome in outcomes:
     for fs in FEATURE_SETS:
@@ -255,5 +238,5 @@ for outcome in outcomes:
         })
         
 results_df = pd.DataFrame(results)
-results_df.to_csv(f'{output_dir}rsf_disease_results.csv', index=False)
+results_df.to_csv(f'{output_dir}rsf_cancer_results.csv', index=False)
 logger.info("Done")

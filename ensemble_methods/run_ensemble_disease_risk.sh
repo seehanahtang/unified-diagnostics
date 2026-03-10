@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=xgb_benchmark_cancer
-#SBATCH --output=logs/xgb_benchmark_cancer_%j.out
-#SBATCH --error=logs/xgb_benchmark_cancer_%j.err
+#SBATCH --job-name=ensemble_disease_risk
+#SBATCH --output=logs/ensemble_disease_risk_%j.out
+#SBATCH --error=logs/ensemble_disease_risk_%j.err
 #SBATCH --partition=mit_normal_gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
@@ -13,7 +13,7 @@ OUTPUT_DIR="results/"
 
 
 echo "=============================================="
-echo "XGBoost Benchmark for Cancer"
+echo "Ensemble Methods for Disease Risk"
 echo "=============================================="
 echo ""
 
@@ -24,11 +24,11 @@ mkdir -p "$OUTPUT_DIR"
 module load miniforge  
 module load cuda/13.0.1  
 
-# Run benchmark
-python run_xgb_benchmark_cancer.py --output-dir "$OUTPUT_DIR"
+# Run ensemble methods
+python3 -u run_ensemble_disease_risk.py
 
 echo ""
 echo "=============================================="
-echo "XGBoost benchmark for cancer complete!"
-echo "Results saved to: $OUTPUT_DIR"
+echo "Ensemble methods for disease risk complete!"
 echo "=============================================="
+
